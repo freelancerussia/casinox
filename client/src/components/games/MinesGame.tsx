@@ -121,9 +121,11 @@ export default function MinesGame({ appState }: MinesGameProps) {
       // Generate new client seed for next game
       setClientSeed(generateClientSeed());
       
-      // Reset game state
+      // IMPORTANT: Set game as active
       setIsGameActive(true);
       setGameOver(false);
+      
+      // Reset game state
       setGrid(Array(25).fill(null).map((_, i) => ({
         index: i,
         revealed: false,
@@ -132,6 +134,11 @@ export default function MinesGame({ appState }: MinesGameProps) {
       })));
       setRevealedPositions([]);
       setTotalProfit(0);
+      
+      console.log("Game started successfully!", { 
+        gameId: data.gameId, 
+        isActive: true 
+      });
       
       toast({
         title: "New Game Started",
