@@ -176,81 +176,64 @@ export default function AuthModal({ isOpen, authType, onClose, appState }: AuthM
         ) : (
           <Form {...registerForm}>
             <form onSubmit={registerForm.handleSubmit(handleRegister)} className="space-y-4">
-              <FormField
-                control={registerForm.control}
-                name="username"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm text-neutral-400">Username</FormLabel>
-                    <FormControl>
-                      <Input
-                        {...field}
-                        className="bg-primary border-neutral-border text-white"
-                        placeholder="yourusername"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={registerForm.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm text-neutral-400">Email</FormLabel>
-                    <FormControl>
-                      <Input
-                        value={field.value}
-                        onChange={field.onChange}
-                        onBlur={field.onBlur}
-                        name={field.name}
-                        ref={field.ref}
-                        type="text"
-                        className="bg-primary border-neutral-border text-white"
-                        placeholder="your@email.com"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={registerForm.control}
-                name="password"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm text-neutral-400">Password</FormLabel>
-                    <FormControl>
-                      <Input
-                        {...field}
-                        type="password"
-                        className="bg-primary border-neutral-border text-white"
-                        placeholder="••••••••"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={registerForm.control}
-                name="confirmPassword"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm text-neutral-400">Confirm Password</FormLabel>
-                    <FormControl>
-                      <Input
-                        {...field}
-                        type="password"
-                        className="bg-primary border-neutral-border text-white"
-                        placeholder="••••••••"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="register-username" className="text-sm text-neutral-400 block mb-1">Username</label>
+                  <input
+                    id="register-username"
+                    type="text"
+                    className="w-full px-3 py-2 bg-primary border border-neutral-border text-white rounded-md"
+                    placeholder="yourusername"
+                    {...registerForm.register("username")}
+                  />
+                  {registerForm.formState.errors.username && (
+                    <p className="text-red-500 text-xs mt-1">{registerForm.formState.errors.username.message}</p>
+                  )}
+                </div>
+                
+                <div>
+                  <label htmlFor="register-email" className="text-sm text-neutral-400 block mb-1">Email</label>
+                  <input
+                    id="register-email"
+                    type="text"
+                    className="w-full px-3 py-2 bg-primary border border-neutral-border text-white rounded-md"
+                    placeholder="your@email.com"
+                    {...registerForm.register("email")}
+                  />
+                  {registerForm.formState.errors.email && (
+                    <p className="text-red-500 text-xs mt-1">{registerForm.formState.errors.email.message}</p>
+                  )}
+                </div>
+                
+                <div>
+                  <label htmlFor="register-password" className="text-sm text-neutral-400 block mb-1">Password</label>
+                  <input
+                    id="register-password"
+                    type="password"
+                    className="w-full px-3 py-2 bg-primary border border-neutral-border text-white rounded-md"
+                    placeholder="••••••••"
+                    {...registerForm.register("password")}
+                  />
+                  {registerForm.formState.errors.password && (
+                    <p className="text-red-500 text-xs mt-1">{registerForm.formState.errors.password.message}</p>
+                  )}
+                </div>
+                
+                <div>
+                  <label htmlFor="register-confirm-password" className="text-sm text-neutral-400 block mb-1">Confirm Password</label>
+                  <input
+                    id="register-confirm-password"
+                    type="password"
+                    className="w-full px-3 py-2 bg-primary border border-neutral-border text-white rounded-md"
+                    placeholder="••••••••"
+                    {...registerForm.register("confirmPassword")}
+                  />
+                  {registerForm.formState.errors.confirmPassword && (
+                    <p className="text-red-500 text-xs mt-1">{registerForm.formState.errors.confirmPassword.message}</p>
+                  )}
+                </div>
+              </div>
+              
               <Button type="submit" className="w-full bg-purple-500 hover:bg-purple-600">
                 Register
               </Button>
