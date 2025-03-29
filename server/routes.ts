@@ -204,6 +204,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  app.get('/api/wallet/transactions', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const transactions = await storage.getUserTransactions(req.session.userId!);
+      res.status(200).json(transactions);
+    } catch (error) {
+      res.status(500).json({ message: 'Error fetching transaction history' });
+    }
+  });
+  
   app.post('/api/wallet/deposit', authMiddleware, async (req: Request, res: Response) => {
     try {
       const { amount } = req.body;

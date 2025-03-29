@@ -81,13 +81,24 @@ export default function AuthModal({ isOpen, authType, onClose, appState }: AuthM
   const handleRegister = async (data: RegisterInput) => {
     try {
       const { confirmPassword, ...registerData } = data;
-      const res = await apiRequest("POST", "/api/auth/register", registerData);
-      const userData = await res.json();
+      
+      // First register the user
+      await apiRequest("POST", "/api/auth/register", registerData);
+      
+      // Then automatically log them in
+      const loginRes = await apiRequest("POST", "/api/auth/login", {
+        username: data.username,
+        password: data.password
+      });
+      
+      const userData = await loginRes.json();
       setUser(userData);
+      
       toast({
         title: "Registration successful",
         description: `Welcome to CasinoX, ${userData.username}!`,
       });
+      
       onClose();
       setLocation("/");
     } catch (error: any) {

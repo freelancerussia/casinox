@@ -46,15 +46,25 @@ export default function Wallet({ appState }: WalletProps) {
     
     setLoading(true);
     try {
-      const res = await apiRequest("GET", "/api/games/history");
-      const data = await res.json();
-      setTransactions(data);
+      // Create a new API endpoint specifically for getting wallet transactions
+      const res = await apiRequest("GET", "/api/wallet/transactions");
+      
+      try {
+        const data = await res.json();
+        setTransactions(data);
+      } catch (parseError) {
+        console.error("Error parsing transaction data:", parseError);
+        setTransactions([]);
+      }
     } catch (error) {
+      console.error("Failed to load transactions:", error);
       toast({
         title: "Error",
         description: "Failed to load transactions",
         variant: "destructive",
       });
+      // Set empty array to prevent UI from showing loading indefinitely
+      setTransactions([]);
     } finally {
       setLoading(false);
     }
