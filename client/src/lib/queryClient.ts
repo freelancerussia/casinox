@@ -12,11 +12,33 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
+  // Get auth token from localStorage
+  const user = localStorage.getItem('user');
+  let token = null;
+  if (user) {
+    try {
+      const userData = JSON.parse(user);
+      token = userData.token;
+    } catch (e) {
+      console.error('Error parsing user data from localStorage:', e);
+    }
+  }
+
+  // Set up headers
+  const headers: Record<string, string> = {
+    ...(data ? { "Content-Type": "application/json" } : {})
+  };
+  
+  // Add Authorization header if token exists
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers,
     body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
+    credentials: "include", // Keep this for cookies too
   });
 
   await throwIfResNotOk(res);
@@ -29,8 +51,29 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
+    // Get auth token from localStorage
+    const user = localStorage.getItem('user');
+    let token = null;
+    if (user) {
+      try {
+        const userData = JSON.parse(user);
+        token = userData.token;
+      } catch (e) {
+        console.error('Error parsing user data from localStorage:', e);
+      }
+    }
+    
+    // Set up headers
+    const headers: Record<string, string> = {};
+    
+    // Add Authorization header if token exists
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
     const res = await fetch(queryKey[0] as string, {
-      credentials: "include",
+      headers,
+      credentials: "include", // Keep this for cookies too
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {

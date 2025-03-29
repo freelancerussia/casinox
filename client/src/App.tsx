@@ -13,29 +13,63 @@ import History from "@/pages/history";
 import Admin from "@/pages/admin";
 import { useEffect, useState } from "react";
 import { apiRequest } from "./lib/queryClient";
-import { User } from "@shared/schema";
+import { User as BaseUser } from "@shared/schema";
 import { initWebSocket } from "./lib/websocket";
+
+// Extend User type to include token property
+export type User = BaseUser & {
+  token?: string;
+};
 
 export type AppState = {
   user: User | null;
   isLoading: boolean;
   setUser: (user: User | null) => void;
+  token?: string;
 };
 
 function Router() {
   const [appState, setAppState] = useState<AppState>({
     user: null,
     isLoading: true,
-    setUser: (user) => setAppState(prev => ({ ...prev, user }))
+    setUser: (user) => {
+      if (user) {
+        // Store user data in localStorage for persistent auth
+        localStorage.setItem('user', JSON.stringify(user));
+      } else {
+        // Remove user data when logging out
+        localStorage.removeItem('user');
+      }
+      setAppState(prev => ({ ...prev, user, token: user?.token }));
+    }
   });
 
   useEffect(() => {
     const checkAuth = async () => {
       try {
+        // Try to get user data from server session first
         const res = await apiRequest("GET", "/api/auth/me");
         const userData = await res.json();
         setAppState(prev => ({ ...prev, user: userData, isLoading: false }));
       } catch (error) {
+        // If server session fails, try to get user data from localStorage
+        try {
+          const storedUser = localStorage.getItem('user');
+          if (storedUser) {
+            const userData = JSON.parse(storedUser);
+            if (userData && userData.token) {
+              setAppState(prev => ({ 
+                ...prev, 
+                user: userData, 
+                token: userData.token,
+                isLoading: false 
+              }));
+              return;
+            }
+          }
+        } catch (e) {
+          console.error('Error parsing stored user data:', e);
+        }
         setAppState(prev => ({ ...prev, isLoading: false }));
       }
     };

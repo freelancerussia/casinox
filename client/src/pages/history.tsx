@@ -38,7 +38,9 @@ export default function HistoryPage({ appState }: HistoryPageProps) {
       const res = await apiRequest("GET", "/api/games/history");
       const data = await res.json();
       setHistory(data);
+      console.log("Game history loaded successfully");
     } catch (error) {
+      console.error("Error fetching game history:", error);
       toast({
         title: "Error",
         description: "Failed to load game history",

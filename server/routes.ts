@@ -24,15 +24,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const MemoryStoreSession = MemoryStore(session);
   const sessionMiddleware = session({
     secret: 'casino-x-secret-key',
-    resave: false,
-    saveUninitialized: false,
+    resave: true,
+    saveUninitialized: true,
     store: new MemoryStoreSession({
       checkPeriod: 86400000 // 24 hours
     }),
     cookie: {
       maxAge: 86400000, // 24 hours
       secure: false,
-      sameSite: 'lax'
+      sameSite: 'lax',
+      httpOnly: true
     }
   });
   
@@ -104,13 +105,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       req.session.isAdmin = user.isAdmin;
       req.session.username = user.username;
       
-      // Return user without password
-      const { password, ...userWithoutPassword } = user;
-      res.status(201).json(userWithoutPassword);
+      // Save session explicitly
+      req.session.save((err) => {
+        if (err) {
+          console.error('Session save error during registration:', err);
+          return res.status(500).json({ message: 'Error during registration - session save failed' });
+        }
+        
+        console.log('Registration successful - Session ID:', req.sessionID);
+        console.log('Registration successful - User ID in session:', req.session.userId);
+        
+        // Return user without password and include a simple token (user ID) 
+        const { password, ...userWithoutPassword } = user;
+        res.status(201).json({
+          ...userWithoutPassword,
+          token: user.id.toString() // Simple token for auth
+        });
+      });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: 'Invalid input data', errors: error.errors });
       }
+      console.error('Registration error:', error);
       res.status(500).json({ message: 'Error creating user' });
     }
   });
@@ -139,10 +155,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       req.session.isAdmin = user.isAdmin;
       req.session.username = user.username;
       
-      // Return user without password
-      const { password: _, ...userWithoutPassword } = user;
-      res.status(200).json(userWithoutPassword);
+      // Save session explicitly
+      req.session.save((err) => {
+        if (err) {
+          console.error('Session save error:', err);
+          return res.status(500).json({ message: 'Error during login - session save failed' });
+        }
+        
+        console.log('Login successful - Session ID:', req.sessionID);
+        console.log('Login successful - User ID in session:', req.session.userId);
+        
+        // Return user without password and include a simple token (user ID)
+        const { password: _, ...userWithoutPassword } = user;
+        res.status(200).json({
+          ...userWithoutPassword,
+          token: user.id.toString() // Simple token for auth
+        });
+      });
     } catch (error) {
+      console.error('Login error:', error);
       res.status(500).json({ message: 'Error during login' });
     }
   });
@@ -177,6 +208,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // User middleware to check authentication
   const authMiddleware = (req: Request, res: Response, next: Function) => {
+    console.log('Auth middleware check - Session ID:', req.sessionID);
+    console.log('Auth middleware check - User ID in session:', req.session.userId);
+    
+    // Check if auth header is present as a fallback
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      try {
+        // Simple token validation (in a real app, use JWT or proper token validation)
+        const userId = parseInt(token);
+        if (!isNaN(userId)) {
+          // Set session data from token
+          req.session.userId = userId;
+          console.log('Using token-based authentication, userId:', userId);
+          return next();
+        }
+      } catch (error) {
+        console.error('Token validation error:', error);
+      }
+    }
+    
+    // Fall back to session-based auth if token is invalid or not present
     if (!req.session.userId) {
       return res.status(401).json({ message: 'Not authenticated' });
     }
