@@ -46,7 +46,7 @@ export default function RecentActivity({ appState }: RecentActivityProps) {
       <CardHeader className="pb-2">
         <div className="flex justify-between items-center">
           <CardTitle className="font-heading font-semibold text-lg">Recent Activity</CardTitle>
-          <button className="text-xs text-purple-500">View All</button>
+          <a href="/history" className="text-xs text-purple-500 hover:underline">View All</a>
         </div>
       </CardHeader>
       <CardContent>

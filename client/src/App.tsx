@@ -9,6 +9,7 @@ import Dice from "@/pages/dice";
 import Crash from "@/pages/crash";
 import Mines from "@/pages/mines";
 import Wallet from "@/pages/wallet";
+import History from "@/pages/history";
 import Admin from "@/pages/admin";
 import { useEffect, useState } from "react";
 import { apiRequest } from "./lib/queryClient";
@@ -59,6 +60,7 @@ function Router() {
       <Route path="/crash" component={() => <Crash appState={appState} />} />
       <Route path="/mines" component={() => <Mines appState={appState} />} />
       <Route path="/wallet" component={() => <Wallet appState={appState} />} />
+      <Route path="/history" component={() => <History appState={appState} />} />
       {appState.user?.isAdmin && <Route path="/admin" component={() => <Admin appState={appState} />} />}
       <Route component={NotFound} />
     </Switch>

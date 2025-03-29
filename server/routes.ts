@@ -31,7 +31,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }),
     cookie: {
       maxAge: 86400000, // 24 hours
-      secure: false
+      secure: false,
+      sameSite: 'lax'
     }
   });
   
