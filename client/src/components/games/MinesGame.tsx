@@ -155,6 +155,7 @@ export default function MinesGame({ appState }: MinesGameProps) {
     if (grid[index].revealed) return;
     
     try {
+      console.log("Revealing cell at index:", index);
       const res = await apiRequest("POST", "/api/games/mines/reveal", {
         gameId,
         position: index,
@@ -165,7 +166,9 @@ export default function MinesGame({ appState }: MinesGameProps) {
       });
       
       const data = await res.json();
+      console.log("Reveal response:", data);
       
+      // Create a new grid to update
       const newGrid = [...grid];
       
       if (data.isHit) {
@@ -226,6 +229,7 @@ export default function MinesGame({ appState }: MinesGameProps) {
       }
       
     } catch (error) {
+      console.error("Error revealing cell:", error);
       toast({
         title: "Error",
         description: "There was an error revealing the cell",
@@ -397,15 +401,17 @@ export default function MinesGame({ appState }: MinesGameProps) {
                 <button
                   key={cell.index}
                   onClick={() => handleRevealCell(cell.index)}
-                  className={`aspect-square rounded-lg flex items-center justify-center transition-all duration-200 ${
+                  className={`aspect-square rounded-lg flex items-center justify-center transition-all duration-200 border ${
                     cell.revealed
                       ? cell.isGem
-                        ? "bg-green-500/20"
+                        ? "bg-green-500/20 border-green-500"
                         : cell.isMine
-                        ? "bg-red-500/20"
-                        : "bg-primary"
-                      : "bg-secondary hover:bg-neutral-800 cursor-pointer"
-                  } ${!isGameActive && !cell.revealed ? "opacity-70 cursor-not-allowed" : ""}`}
+                        ? "bg-red-500/20 border-red-500"
+                        : "bg-primary border-neutral-700"
+                      : isGameActive
+                        ? "bg-secondary hover:bg-neutral-800 border-neutral-700 hover:border-neutral-500 cursor-pointer"
+                        : "bg-secondary border-neutral-700 opacity-70 cursor-not-allowed"
+                  }`}
                   disabled={!isGameActive || cell.revealed}
                 >
                   {cell.revealed && cell.isGem && (
@@ -421,7 +427,7 @@ export default function MinesGame({ appState }: MinesGameProps) {
                       strokeLinecap="round"
                       strokeLinejoin="round"
                     >
-                      <path d="m6 9 6 6 6-6" />
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                     </svg>
                   )}
                   {cell.revealed && cell.isMine && (
@@ -437,8 +443,9 @@ export default function MinesGame({ appState }: MinesGameProps) {
                       strokeLinecap="round"
                       strokeLinejoin="round"
                     >
-                      <circle cx="12" cy="12" r="10" />
-                      <path d="m4.93 4.93 14.14 14.14" />
+                      <circle cx="12" cy="12" r="8" />
+                      <line x1="12" y1="8" x2="12" y2="16" />
+                      <line x1="8" y1="12" x2="16" y2="12" />
                     </svg>
                   )}
                 </button>
