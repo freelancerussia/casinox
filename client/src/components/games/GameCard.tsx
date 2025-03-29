@@ -1,64 +1,82 @@
-import { Link } from 'wouter';
-import { Card } from '@/components/ui/card';
-import { cn } from '@/lib/utils';
+import { Link } from "wouter";
 
 interface GameCardProps {
   title: string;
-  icon: React.ReactNode;
   description: string;
-  stats: {
-    label: string;
-    value: string;
-  }[];
-  gradient: string;
-  path: string;
-  extraContent?: React.ReactNode;
+  icon: React.ReactNode;
+  playersCount: number;
+  rtp: number;
+  route: string;
+  accentColor: string;
+  buttonColor: string;
 }
 
-export default function GameCard({ 
-  title, 
-  icon, 
-  description, 
-  stats, 
-  gradient, 
-  path,
-  extraContent
+export default function GameCard({
+  title,
+  description,
+  icon,
+  playersCount,
+  rtp,
+  route,
+  accentColor,
+  buttonColor,
 }: GameCardProps) {
   return (
-    <Card className="game-card bg-primary rounded-xl overflow-hidden shadow-lg h-full transition-all hover:-translate-y-1 hover:shadow-xl">
-      <div className={cn("h-2", gradient)}></div>
-      <div className="p-6">
-        <div className="flex items-center mb-4">
-          <div className="w-10 h-10 rounded-full bg-primary-light flex items-center justify-center mr-3">
-            {icon}
+    <div className="game-card bg-secondary rounded-xl overflow-hidden border border-neutral-border transition-all duration-300 hover:translate-y-[-4px] hover:shadow-lg">
+      <div 
+        className={`h-40 relative p-4`}
+        style={{ background: `linear-gradient(to bottom right, ${accentColor}20, ${accentColor}05)` }}
+      >
+        <div className="absolute top-4 right-4 bg-black/30 rounded-lg px-2 py-1 text-xs">
+          <span className="text-green-500">{rtp}% RTP</span>
+        </div>
+        <div className="absolute bottom-4 left-4">
+          <h4 className="font-bold">{title}</h4>
+          <p className="text-xs text-neutral-400">{description}</p>
+        </div>
+        <div className="absolute bottom-0 right-0 w-24 h-24 text-8xl opacity-20" style={{ color: accentColor }}>
+          {icon}
+        </div>
+      </div>
+      <div className="p-4">
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+            <span className="text-xs text-neutral-400">{new Intl.NumberFormat().format(playersCount)} playing</span>
           </div>
-          <h3 className="font-heading font-semibold">{title}</h3>
-        </div>
-        <p className="text-gray-400 text-sm mb-4">{description}</p>
-        
-        <div className="bg-primary-dark rounded-lg p-4 mb-4">
-          {stats.map((stat, index) => (
-            <div 
-              key={index} 
-              className={cn(
-                "flex justify-between", 
-                index < stats.length - 1 ? "mb-2" : ""
-              )}
+          <div className="text-xs text-neutral-400">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="inline mr-1"
             >
-              <span className="text-xs text-gray-400">{stat.label}</span>
-              <span className="text-xs text-white">{stat.value}</span>
-            </div>
-          ))}
+              <path d="M12 2v10.4" />
+              <path d="M12 22v-1.6" />
+              <path d="M4.93 4.93l7.37 7.37" />
+              <path d="M19.07 19.07l-1.76-1.76" />
+              <path d="M2 12h10.4" />
+              <path d="M22 12h-1.6" />
+              <path d="M4.93 19.07l7.37-7.37" />
+              <path d="M19.07 4.93l-1.76 1.76" />
+            </svg>
+            <span>Provably Fair</span>
+          </div>
         </div>
-        
-        {extraContent}
-        
-        <Link href={path}>
-          <a className="block text-center bg-accent hover:bg-accent-light text-white py-2 rounded-lg transition duration-200">
-            Play Now
-          </a>
+        <Link 
+          href={route}
+          className={`w-full block py-2 rounded-lg text-white text-sm text-center font-medium transition-colors`}
+          style={{ backgroundColor: buttonColor, ":hover": { opacity: 0.9 } }}
+        >
+          Play Now
         </Link>
       </div>
-    </Card>
+    </div>
   );
 }

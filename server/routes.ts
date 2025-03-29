@@ -1,695 +1,389 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertUserSchema, loginUserSchema, insertTransactionSchema, insertGameHistorySchema } from "@shared/schema";
-import * as crypto from 'crypto';
-import jwt from 'jsonwebtoken';
-import expressSession from 'express-session';
-import MemoryStore from 'memorystore';
+import { insertUserSchema, insertGameHistorySchema, insertTransactionSchema } from "@shared/schema";
+import * as crypto from "crypto";
+import { z } from "zod";
+import session from "express-session";
+import MemoryStore from "memorystore";
+import { WebSocketServer } from "ws";
 
-const MS_Store = MemoryStore(expressSession);
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
-
-// Generate a provably fair result for dice game
-function generateDiceResult(serverSeed: string, clientSeed: string, nonce: number): number {
-  const combinedSeed = `${serverSeed}:${clientSeed}:${nonce}`;
-  const hash = crypto.createHash('sha256').update(combinedSeed).digest('hex');
-  
-  // Use first 8 characters of hash as hexadecimal number
-  const hexSubstring = hash.substring(0, 8);
-  // Convert to decimal and divide by max possible value (0xffffffff)
-  const decimalValue = parseInt(hexSubstring, 16);
-  const normalizedValue = decimalValue / 0xffffffff;
-  
-  // Scale to 0-100 range with 2 decimal places
-  return parseFloat((normalizedValue * 100).toFixed(2));
-}
-
-// Generate a mines grid
-function generateMinesGrid(numMines: number, serverSeed: string, clientSeed: string, nonce: number): number[] {
-  const combinedSeed = `${serverSeed}:${clientSeed}:${nonce}`;
-  const hash = crypto.createHash('sha256').update(combinedSeed).digest('hex');
-  
-  // Create array of 25 positions (0-24)
-  const positions = Array.from({ length: 25 }, (_, i) => i);
-  
-  // Shuffle using Fisher-Yates algorithm with the hash as randomness source
-  for (let i = positions.length - 1; i > 0; i--) {
-    // Use subsequence of the hash for each iteration
-    const hashPart = hash.substring((i * 2) % (hash.length - 8), (i * 2) % (hash.length - 8) + 8);
-    const j = Math.floor((parseInt(hashPart, 16) / 0xffffffff) * (i + 1));
-    [positions[i], positions[j]] = [positions[j], positions[i]];
+declare module "express-session" {
+  interface SessionData {
+    userId: number;
+    isAdmin: boolean;
+    username: string;
   }
-  
-  // Return first n positions as mine locations
-  return positions.slice(0, numMines);
-}
-
-// Generate a crash point
-function generateCrashPoint(serverSeed: string, clientSeed: string, nonce: number): number {
-  const combinedSeed = `${serverSeed}:${clientSeed}:${nonce}`;
-  const hash = crypto.createHash('sha256').update(combinedSeed).digest('hex');
-  
-  // Use first 8 characters of hash as hexadecimal number
-  const hexSubstring = hash.substring(0, 8);
-  const decimalValue = parseInt(hexSubstring, 16);
-  
-  // Formula: (1 / (1 - R)) * 0.99, where R is a random number between 0 and 1
-  // This creates an exponential distribution where most results are low values
-  // but occasionally you get very high values
-  const r = decimalValue / 0xffffffff;
-  
-  // If r is very close to 1, cap it to avoid infinity
-  const cappedR = Math.min(r, 0.99);
-  let crashPoint = (1 / (1 - cappedR)) * 0.99;
-  
-  // Cap maximum crash point and round to 2 decimal places
-  crashPoint = Math.min(crashPoint, 100.0);
-  return parseFloat(crashPoint.toFixed(2));
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup session middleware
-  app.use(
-    expressSession({
-      cookie: { maxAge: 86400000 }, // 24 hours
-      store: new MS_Store({
-        checkPeriod: 86400000 // prune expired entries every 24 hours
-      }),
-      resave: false,
-      saveUninitialized: false,
-      secret: 'casino-session-secret'
-    })
-  );
+  const httpServer = createServer(app);
+  const wss = new WebSocketServer({ server: httpServer });
   
-  // Auth middleware
-  const authenticateJWT = (req: Request, res: Response, next: Function) => {
-    const authHeader = req.headers.authorization;
-    
-    if (authHeader) {
-      const token = authHeader.split(' ')[1];
-      
-      jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-          return res.status(403).json({ message: 'Invalid or expired token' });
-        }
-        
-        req.user = user;
-        next();
-      });
-    } else {
-      res.status(401).json({ message: 'Unauthorized: No token provided' });
-    }
-  };
-  
-  // Admin middleware
-  const isAdmin = async (req: Request, res: Response, next: Function) => {
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({ message: 'Unauthorized: Not logged in' });
-    }
-    
-    const user = await storage.getUser(req.user.id);
-    
-    if (!user || !user.isAdmin) {
-      return res.status(403).json({ message: 'Forbidden: Admin access required' });
-    }
-    
-    next();
-  };
-  
-  // API routes
-  // Auth endpoints
-  app.post('/api/auth/register', async (req, res) => {
-    try {
-      const userInput = insertUserSchema.parse(req.body);
-      
-      // Check if user exists
-      const existingUser = await storage.getUserByUsername(userInput.username);
-      if (existingUser) {
-        return res.status(400).json({ message: 'Username already exists' });
-      }
-      
-      const existingEmail = await storage.getUserByEmail(userInput.email);
-      if (existingEmail) {
-        return res.status(400).json({ message: 'Email already in use' });
-      }
-      
-      // Create user
-      const newUser = await storage.createUser(userInput);
-      
-      // Create token
-      const token = jwt.sign({ id: newUser.id, username: newUser.username }, JWT_SECRET, { expiresIn: '1d' });
-      
-      // Don't return password in response
-      const { password, ...userWithoutPassword } = newUser;
-      
-      res.status(201).json({ 
-        message: 'User created successfully',
-        user: userWithoutPassword,
-        token
-      });
-    } catch (error) {
-      res.status(400).json({ message: error.message });
+  // Create session store
+  const MemoryStoreSession = MemoryStore(session);
+  const sessionMiddleware = session({
+    secret: 'casino-x-secret-key',
+    resave: false,
+    saveUninitialized: false,
+    store: new MemoryStoreSession({
+      checkPeriod: 86400000 // 24 hours
+    }),
+    cookie: {
+      maxAge: 86400000, // 24 hours
+      secure: false
     }
   });
   
-  app.post('/api/auth/login', async (req, res) => {
+  app.use(sessionMiddleware);
+  
+  // WebSocket connection
+  wss.on('connection', (ws) => {
+    console.log('Client connected to WebSocket');
+    
+    ws.on('message', (message) => {
+      try {
+        const data = JSON.parse(message.toString());
+        console.log('Received message:', data);
+      } catch (error) {
+        console.error('Error parsing WebSocket message:', error);
+      }
+    });
+    
+    ws.on('close', () => {
+      console.log('Client disconnected from WebSocket');
+    });
+  });
+  
+  // Broadcasting game events
+  const broadcastGameEvent = (eventType: string, data: any) => {
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ type: eventType, data }));
+      }
+    });
+  };
+  
+  // Authentication Routes
+  app.post('/api/auth/register', async (req: Request, res: Response) => {
     try {
-      const credentials = loginUserSchema.parse(req.body);
+      const userData = insertUserSchema.parse(req.body);
       
-      const user = await storage.getUserByUsername(credentials.username);
+      // Check if username or email already exists
+      const existingUsername = await storage.getUserByUsername(userData.username);
+      if (existingUsername) {
+        return res.status(400).json({ message: 'Username already taken' });
+      }
       
-      if (!user || user.password !== credentials.password) {
+      const existingEmail = await storage.getUserByEmail(userData.email);
+      if (existingEmail) {
+        return res.status(400).json({ message: 'Email already registered' });
+      }
+      
+      // Hash password
+      const hashedPassword = crypto.createHash('sha256').update(userData.password).digest('hex');
+      
+      // Create user with starting balance of 1000 credits
+      const user = await storage.createUser({
+        ...userData,
+        password: hashedPassword,
+        balance: 1000,
+        isAdmin: false
+      });
+      
+      // Create initial deposit transaction
+      await storage.createTransaction({
+        userId: user.id,
+        type: 'deposit',
+        amount: 1000
+      });
+      
+      // Set session
+      req.session.userId = user.id;
+      req.session.isAdmin = user.isAdmin;
+      req.session.username = user.username;
+      
+      // Return user without password
+      const { password, ...userWithoutPassword } = user;
+      res.status(201).json(userWithoutPassword);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: 'Invalid input data', errors: error.errors });
+      }
+      res.status(500).json({ message: 'Error creating user' });
+    }
+  });
+  
+  app.post('/api/auth/login', async (req: Request, res: Response) => {
+    try {
+      const { username, password } = req.body;
+      
+      if (!username || !password) {
+        return res.status(400).json({ message: 'Username and password are required' });
+      }
+      
+      const user = await storage.getUserByUsername(username);
+      if (!user) {
         return res.status(401).json({ message: 'Invalid username or password' });
       }
       
-      // Create token
-      const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '1d' });
+      // Check password
+      const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
+      if (user.password !== hashedPassword) {
+        return res.status(401).json({ message: 'Invalid username or password' });
+      }
       
-      // Don't return password in response
-      const { password, ...userWithoutPassword } = user;
+      // Set session
+      req.session.userId = user.id;
+      req.session.isAdmin = user.isAdmin;
+      req.session.username = user.username;
       
-      res.json({ 
-        message: 'Login successful',
-        user: userWithoutPassword,
-        token
-      });
+      // Return user without password
+      const { password: _, ...userWithoutPassword } = user;
+      res.status(200).json(userWithoutPassword);
     } catch (error) {
-      res.status(400).json({ message: error.message });
+      res.status(500).json({ message: 'Error during login' });
     }
   });
   
-  // User endpoints
-  app.get('/api/users/me', authenticateJWT, async (req, res) => {
+  app.post('/api/auth/logout', (req: Request, res: Response) => {
+    req.session.destroy((err) => {
+      if (err) {
+        return res.status(500).json({ message: 'Error during logout' });
+      }
+      res.status(200).json({ message: 'Logged out successfully' });
+    });
+  });
+  
+  app.get('/api/auth/me', async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: 'Not authenticated' });
+    }
+    
     try {
-      const user = await storage.getUser(req.user.id);
-      
+      const user = await storage.getUser(req.session.userId);
       if (!user) {
         return res.status(404).json({ message: 'User not found' });
       }
       
-      // Don't return password in response
+      // Return user without password
       const { password, ...userWithoutPassword } = user;
-      
-      res.json(userWithoutPassword);
+      res.status(200).json(userWithoutPassword);
     } catch (error) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Error fetching user data' });
     }
   });
   
-  // Wallet endpoints
-  app.post('/api/wallet/deposit', authenticateJWT, async (req, res) => {
+  // User middleware to check authentication
+  const authMiddleware = (req: Request, res: Response, next: Function) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: 'Not authenticated' });
+    }
+    next();
+  };
+  
+  // Admin middleware
+  const adminMiddleware = (req: Request, res: Response, next: Function) => {
+    if (!req.session.userId || !req.session.isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    next();
+  };
+  
+  // Wallet Routes
+  app.get('/api/wallet', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      res.status(200).json({ balance: user.balance });
+    } catch (error) {
+      res.status(500).json({ message: 'Error fetching wallet data' });
+    }
+  });
+  
+  app.post('/api/wallet/deposit', authMiddleware, async (req: Request, res: Response) => {
     try {
       const { amount } = req.body;
       
       if (!amount || amount <= 0) {
-        return res.status(400).json({ message: 'Invalid amount' });
+        return res.status(400).json({ message: 'Invalid deposit amount' });
       }
       
       // Update user balance
-      const updatedUser = await storage.updateUserBalance(req.user.id, amount);
-      
+      const updatedUser = await storage.updateUserBalance(req.session.userId!, amount);
       if (!updatedUser) {
         return res.status(404).json({ message: 'User not found' });
       }
       
       // Create transaction record
-      const transaction = await storage.createTransaction({
-        userId: req.user.id,
+      await storage.createTransaction({
+        userId: req.session.userId!,
         type: 'deposit',
-        amount,
-        gameType: null,
-        meta: {}
+        amount
       });
       
-      res.json({ 
-        message: 'Deposit successful',
-        balance: updatedUser.balance,
-        transaction
-      });
+      res.status(200).json({ balance: updatedUser.balance });
     } catch (error) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Error processing deposit' });
     }
   });
   
-  app.post('/api/wallet/withdraw', authenticateJWT, async (req, res) => {
+  app.post('/api/wallet/withdraw', authMiddleware, async (req: Request, res: Response) => {
     try {
       const { amount } = req.body;
       
       if (!amount || amount <= 0) {
-        return res.status(400).json({ message: 'Invalid amount' });
+        return res.status(400).json({ message: 'Invalid withdrawal amount' });
       }
       
-      // Get current user
-      const user = await storage.getUser(req.user.id);
-      
+      // Check if user has sufficient balance
+      const user = await storage.getUser(req.session.userId!);
       if (!user) {
         return res.status(404).json({ message: 'User not found' });
       }
       
-      // Check if user has enough balance
       if (user.balance < amount) {
         return res.status(400).json({ message: 'Insufficient balance' });
       }
       
       // Update user balance
-      const updatedUser = await storage.updateUserBalance(req.user.id, -amount);
+      const updatedUser = await storage.updateUserBalance(req.session.userId!, -amount);
       
       // Create transaction record
-      const transaction = await storage.createTransaction({
-        userId: req.user.id,
+      await storage.createTransaction({
+        userId: req.session.userId!,
         type: 'withdraw',
-        amount: -amount,
-        gameType: null,
-        meta: {}
+        amount: -amount
       });
       
-      res.json({ 
-        message: 'Withdrawal successful',
-        balance: updatedUser.balance,
-        transaction
-      });
+      res.status(200).json({ balance: updatedUser!.balance });
     } catch (error) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Error processing withdrawal' });
     }
   });
   
-  app.get('/api/wallet/transactions', authenticateJWT, async (req, res) => {
-    try {
-      const transactions = await storage.getTransactionsByUserId(req.user.id);
-      
-      res.json(transactions);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
+  // Game Routes
+  // Helper function for provably fair calculations
+  const calculateGameResult = (serverSeed: string, clientSeed: string, nonce: number, gameType: string) => {
+    const combinedSeed = `${serverSeed}-${clientSeed}-${nonce}`;
+    const hash = crypto.createHash('sha256').update(combinedSeed).digest('hex');
+    
+    // Convert first 8 characters of hash to a decimal number between 0-1
+    const hexString = hash.slice(0, 8);
+    const decimalValue = parseInt(hexString, 16) / 0xffffffff; // Normalize to 0-1
+    
+    return decimalValue;
+  };
   
-  // Game endpoints - Dice
-  app.post('/api/games/dice/play', authenticateJWT, async (req, res) => {
+  // Dice Game
+  app.post('/api/games/dice/play', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { betAmount, target, mode, clientSeed } = req.body;
+      const { betAmount, target, isUnder, clientSeed } = req.body;
       
       if (!betAmount || betAmount <= 0) {
         return res.status(400).json({ message: 'Invalid bet amount' });
       }
       
-      if (!target || target < 1 || target > 95) {
-        return res.status(400).json({ message: 'Invalid target (1-95)' });
+      if (!target || target < 1 || target > 99) {
+        return res.status(400).json({ message: 'Target must be between 1 and 99' });
       }
       
-      if (!mode || (mode !== 'under' && mode !== 'over')) {
-        return res.status(400).json({ message: 'Invalid mode (under/over)' });
+      if (typeof isUnder !== 'boolean') {
+        return res.status(400).json({ message: 'isUnder must be a boolean' });
       }
       
       if (!clientSeed) {
         return res.status(400).json({ message: 'Client seed is required' });
       }
       
-      // Get current user
-      const user = await storage.getUser(req.user.id);
-      
+      // Get user
+      const user = await storage.getUser(req.session.userId!);
       if (!user) {
         return res.status(404).json({ message: 'User not found' });
       }
       
-      // Check if user has enough balance
+      // Check if user has sufficient balance
       if (user.balance < betAmount) {
         return res.status(400).json({ message: 'Insufficient balance' });
       }
       
-      // Create server seed and hash it
-      const serverSeed = storage.generateServerSeed();
-      const serverSeedHashed = storage.hashServerSeed(serverSeed);
-      const nonce = Math.floor(Math.random() * 1000000);
-      
-      // Generate result
-      const roll = generateDiceResult(serverSeed, clientSeed, nonce);
-      
-      // Determine if user won
-      let won = false;
-      if (mode === 'under') {
-        won = roll < target;
-      } else {
-        won = roll > target;
+      // Get server seed
+      const serverSeedPair = await storage.getServerSeedPair(user.id);
+      if (!serverSeedPair) {
+        return res.status(500).json({ message: 'Error generating game result' });
       }
       
-      // Calculate multiplier and payout
-      // Multiplier formula: 99 / target for "under", 99 / (100 - target) for "over"
-      let multiplier = 0;
-      if (mode === 'under') {
-        multiplier = parseFloat((99 / target).toFixed(2));
-      } else {
-        multiplier = parseFloat((99 / (100 - target)).toFixed(2));
+      // Calculate result
+      const randomValue = calculateGameResult(serverSeedPair.seed, clientSeed, serverSeedPair.nonce, 'dice');
+      const diceResult = Math.floor(randomValue * 100) + 1; // 1-100
+      
+      // Determine win or lose
+      const hasWon = isUnder ? diceResult < target : diceResult > target;
+      
+      // Calculate payout multiplier and winnings
+      const winChance = isUnder ? target - 1 : 100 - target;
+      const multiplier = (100 - 1) / winChance; // 1% house edge
+      
+      let outcome = -betAmount; // Default to loss
+      if (hasWon) {
+        outcome = betAmount * (multiplier - 1); // Subtract original bet amount
       }
-      
-      // Calculate payout
-      const payout = won ? Math.floor(betAmount * multiplier) : 0;
-      
-      // Update user balance (-betAmount + payout)
-      const balanceChange = -betAmount + payout;
-      const updatedUser = await storage.updateUserBalance(req.user.id, balanceChange);
-      
-      // Create game history record
-      const gameHistory = await storage.createGameHistory({
-        userId: req.user.id,
-        gameType: 'dice',
-        betAmount,
-        multiplier,
-        payout,
-        result: { roll, target, mode, won },
-        clientSeed,
-        serverSeed,
-        serverSeedHashed,
-        nonce
-      });
-      
-      // Create transaction record
-      await storage.createTransaction({
-        userId: req.user.id,
-        type: 'bet',
-        amount: -betAmount,
-        gameType: 'dice',
-        meta: { gameHistoryId: gameHistory.id }
-      });
-      
-      if (won) {
-        await storage.createTransaction({
-          userId: req.user.id,
-          type: 'win',
-          amount: payout,
-          gameType: 'dice',
-          meta: { gameHistoryId: gameHistory.id }
-        });
-      }
-      
-      res.json({
-        result: {
-          roll,
-          won,
-          multiplier,
-          payout
-        },
-        balance: updatedUser.balance,
-        serverSeedHashed,
-        nonce
-      });
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-  
-  // Game endpoints - Mines
-  app.post('/api/games/mines/setup', authenticateJWT, async (req, res) => {
-    try {
-      const { betAmount, mineCount, clientSeed } = req.body;
-      
-      if (!betAmount || betAmount <= 0) {
-        return res.status(400).json({ message: 'Invalid bet amount' });
-      }
-      
-      if (!mineCount || mineCount < 1 || mineCount > 24) {
-        return res.status(400).json({ message: 'Invalid mine count (1-24)' });
-      }
-      
-      if (!clientSeed) {
-        return res.status(400).json({ message: 'Client seed is required' });
-      }
-      
-      // Get current user
-      const user = await storage.getUser(req.user.id);
-      
-      if (!user) {
-        return res.status(404).json({ message: 'User not found' });
-      }
-      
-      // Check if user has enough balance
-      if (user.balance < betAmount) {
-        return res.status(400).json({ message: 'Insufficient balance' });
-      }
-      
-      // Create server seed and hash it
-      const serverSeed = storage.generateServerSeed();
-      const serverSeedHashed = storage.hashServerSeed(serverSeed);
-      const nonce = Math.floor(Math.random() * 1000000);
-      
-      // Generate mine positions (but don't send them to client)
-      const minePositions = generateMinesGrid(mineCount, serverSeed, clientSeed, nonce);
-      
-      // Update user balance (-betAmount)
-      const updatedUser = await storage.updateUserBalance(req.user.id, -betAmount);
-      
-      // Store game state in session
-      req.session.minesGame = {
-        betAmount,
-        mineCount,
-        minePositions,
-        clientSeed,
-        serverSeed,
-        serverSeedHashed,
-        nonce,
-        revealed: [],
-        cashoutMultiplier: 0,
-        gameOver: false
-      };
-      
-      // Create transaction record
-      await storage.createTransaction({
-        userId: req.user.id,
-        type: 'bet',
-        amount: -betAmount,
-        gameType: 'mines',
-        meta: { mineCount }
-      });
-      
-      res.json({
-        message: 'Game setup successfully',
-        balance: updatedUser.balance,
-        serverSeedHashed,
-        nonce
-      });
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-  
-  app.post('/api/games/mines/reveal', authenticateJWT, async (req, res) => {
-    try {
-      const { position } = req.body;
-      
-      if (position === undefined || position < 0 || position > 24) {
-        return res.status(400).json({ message: 'Invalid position (0-24)' });
-      }
-      
-      // Check if game is in progress
-      if (!req.session.minesGame) {
-        return res.status(400).json({ message: 'No active game' });
-      }
-      
-      // Check if game is over
-      if (req.session.minesGame.gameOver) {
-        return res.status(400).json({ message: 'Game is over' });
-      }
-      
-      // Check if position already revealed
-      if (req.session.minesGame.revealed.includes(position)) {
-        return res.status(400).json({ message: 'Position already revealed' });
-      }
-      
-      // Check if it's a mine
-      const isMine = req.session.minesGame.minePositions.includes(position);
-      
-      // Add to revealed positions
-      req.session.minesGame.revealed.push(position);
-      
-      // Calculate current multiplier based on revealed safe cells
-      const safeRevealed = req.session.minesGame.revealed.length;
-      const totalSafeCells = 25 - req.session.minesGame.mineCount;
-      
-      // Use a multiplier formula that increases exponentially with each reveal
-      // This is similar to how real mines games work
-      const baseMultiplier = 25 / (25 - req.session.minesGame.mineCount);
-      const currentMultiplier = parseFloat((baseMultiplier ** safeRevealed).toFixed(2));
-      
-      req.session.minesGame.cashoutMultiplier = currentMultiplier;
-      
-      let result;
-      
-      if (isMine) {
-        // Game over - player lost
-        req.session.minesGame.gameOver = true;
-        
-        // Create game history record
-        await storage.createGameHistory({
-          userId: req.user.id,
-          gameType: 'mines',
-          betAmount: req.session.minesGame.betAmount,
-          multiplier: 0,
-          payout: 0,
-          result: { 
-            minePositions: req.session.minesGame.minePositions,
-            revealed: req.session.minesGame.revealed,
-            lastRevealed: position,
-            won: false
-          },
-          clientSeed: req.session.minesGame.clientSeed,
-          serverSeed: req.session.minesGame.serverSeed,
-          serverSeedHashed: req.session.minesGame.serverSeedHashed,
-          nonce: req.session.minesGame.nonce
-        });
-        
-        result = {
-          isMine: true,
-          gameOver: true,
-          minePositions: req.session.minesGame.minePositions,
-          multiplier: 0,
-          payout: 0
-        };
-      } else {
-        // Safe cell revealed
-        // Check if all safe cells revealed (game won)
-        const allSafeCellsRevealed = req.session.minesGame.revealed.length === totalSafeCells;
-        
-        if (allSafeCellsRevealed) {
-          req.session.minesGame.gameOver = true;
-          
-          // Maximum payout reached
-          const payout = Math.floor(req.session.minesGame.betAmount * currentMultiplier);
-          
-          // Update user balance
-          const updatedUser = await storage.updateUserBalance(req.user.id, payout);
-          
-          // Create game history record
-          await storage.createGameHistory({
-            userId: req.user.id,
-            gameType: 'mines',
-            betAmount: req.session.minesGame.betAmount,
-            multiplier: currentMultiplier,
-            payout,
-            result: { 
-              minePositions: req.session.minesGame.minePositions,
-              revealed: req.session.minesGame.revealed,
-              lastRevealed: position,
-              won: true
-            },
-            clientSeed: req.session.minesGame.clientSeed,
-            serverSeed: req.session.minesGame.serverSeed,
-            serverSeedHashed: req.session.minesGame.serverSeedHashed,
-            nonce: req.session.minesGame.nonce
-          });
-          
-          // Create win transaction
-          await storage.createTransaction({
-            userId: req.user.id,
-            type: 'win',
-            amount: payout,
-            gameType: 'mines',
-            meta: { 
-              mineCount: req.session.minesGame.mineCount,
-              revealedCount: req.session.minesGame.revealed.length
-            }
-          });
-          
-          result = {
-            isMine: false,
-            gameOver: true,
-            multiplier: currentMultiplier,
-            payout,
-            potentialMultiplier: null,
-            balance: updatedUser.balance
-          };
-        } else {
-          // Game continues
-          // Calculate potential multiplier for next reveal
-          const nextMultiplier = parseFloat((baseMultiplier ** (safeRevealed + 1)).toFixed(2));
-          
-          result = {
-            isMine: false,
-            gameOver: false,
-            multiplier: currentMultiplier,
-            potentialMultiplier: nextMultiplier,
-            payout: Math.floor(req.session.minesGame.betAmount * currentMultiplier)
-          };
-        }
-      }
-      
-      res.json(result);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-  
-  app.post('/api/games/mines/cashout', authenticateJWT, async (req, res) => {
-    try {
-      // Check if game is in progress
-      if (!req.session.minesGame) {
-        return res.status(400).json({ message: 'No active game' });
-      }
-      
-      // Check if game is over
-      if (req.session.minesGame.gameOver) {
-        return res.status(400).json({ message: 'Game is already over' });
-      }
-      
-      // Check if any cells have been revealed
-      if (req.session.minesGame.revealed.length === 0) {
-        return res.status(400).json({ message: 'No cells revealed yet' });
-      }
-      
-      // Calculate payout
-      const payout = Math.floor(req.session.minesGame.betAmount * req.session.minesGame.cashoutMultiplier);
       
       // Update user balance
-      const updatedUser = await storage.updateUserBalance(req.user.id, payout);
+      const updatedUser = await storage.updateUserBalance(user.id, outcome);
       
       // Create game history record
       await storage.createGameHistory({
-        userId: req.user.id,
-        gameType: 'mines',
-        betAmount: req.session.minesGame.betAmount,
-        multiplier: req.session.minesGame.cashoutMultiplier,
-        payout,
-        result: { 
-          minePositions: req.session.minesGame.minePositions,
-          revealed: req.session.minesGame.revealed,
-          won: true,
-          cashedOut: true
-        },
-        clientSeed: req.session.minesGame.clientSeed,
-        serverSeed: req.session.minesGame.serverSeed,
-        serverSeedHashed: req.session.minesGame.serverSeedHashed,
-        nonce: req.session.minesGame.nonce
+        userId: user.id,
+        gameType: 'dice',
+        betAmount,
+        multiplier: hasWon ? multiplier : 0,
+        outcome,
+        gameData: JSON.stringify({
+          target,
+          isUnder,
+          result: diceResult,
+          hasWon,
+          serverSeedHash: serverSeedPair.hash,
+          clientSeed,
+          nonce: serverSeedPair.nonce
+        })
       });
       
-      // Create win transaction
+      // Create transaction record
       await storage.createTransaction({
-        userId: req.user.id,
-        type: 'win',
-        amount: payout,
-        gameType: 'mines',
-        meta: { 
-          mineCount: req.session.minesGame.mineCount,
-          revealedCount: req.session.minesGame.revealed.length,
-          cashedOut: true
+        userId: user.id,
+        type: hasWon ? 'win' : 'loss',
+        amount: outcome
+      });
+      
+      // Update server seed nonce
+      await storage.updateServerSeedNonce(serverSeedPair.id);
+      
+      // Return game result
+      res.status(200).json({
+        result: diceResult,
+        hasWon,
+        multiplier: hasWon ? multiplier : 0,
+        profit: outcome,
+        balance: updatedUser!.balance,
+        gameData: {
+          target,
+          isUnder,
+          serverSeedHash: serverSeedPair.hash,
+          nonce: serverSeedPair.nonce
         }
       });
-      
-      // Mark game as over
-      req.session.minesGame.gameOver = true;
-      
-      res.json({
-        message: 'Cashout successful',
-        multiplier: req.session.minesGame.cashoutMultiplier,
-        payout,
-        minePositions: req.session.minesGame.minePositions,
-        balance: updatedUser.balance
-      });
     } catch (error) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Error processing dice game' });
     }
   });
   
-  // Game endpoints - Crash
-  app.post('/api/games/crash/play', authenticateJWT, async (req, res) => {
+  // Crash Game
+  app.post('/api/games/crash/bet', authMiddleware, async (req: Request, res: Response) => {
     try {
       const { betAmount, autoCashout, clientSeed } = req.body;
       
@@ -697,309 +391,492 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid bet amount' });
       }
       
-      if (autoCashout && (autoCashout < 1.01 || autoCashout > 100)) {
-        return res.status(400).json({ message: 'Invalid auto-cashout (1.01-100)' });
+      if (!clientSeed) {
+        return res.status(400).json({ message: 'Client seed is required' });
+      }
+      
+      // Get user
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      // Check if user has sufficient balance
+      if (user.balance < betAmount) {
+        return res.status(400).json({ message: 'Insufficient balance' });
+      }
+      
+      // Get server seed
+      const serverSeedPair = await storage.getServerSeedPair(user.id);
+      if (!serverSeedPair) {
+        return res.status(500).json({ message: 'Error generating game result' });
+      }
+      
+      // Calculate crash point
+      const randomValue = calculateGameResult(serverSeedPair.seed, clientSeed, serverSeedPair.nonce, 'crash');
+      
+      // Formula to calculate crash point (similar to Bustabit algorithm)
+      const houseEdge = 0.01; // 1%
+      const crashPoint = Math.max(1, Math.floor(100 / (randomValue * 100 * houseEdge)) / 100);
+      
+      // Deduct the bet amount first
+      await storage.updateUserBalance(user.id, -betAmount);
+      
+      // Return crash point and player bet info
+      res.status(200).json({
+        crashPoint,
+        betAmount,
+        autoCashout,
+        gameData: {
+          serverSeedHash: serverSeedPair.hash,
+          clientSeed,
+          nonce: serverSeedPair.nonce
+        }
+      });
+      
+      // Update server seed nonce
+      await storage.updateServerSeedNonce(serverSeedPair.id);
+    } catch (error) {
+      res.status(500).json({ message: 'Error processing crash game bet' });
+    }
+  });
+  
+  app.post('/api/games/crash/cashout', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const { betAmount, cashoutMultiplier, crashPoint } = req.body;
+      
+      if (!betAmount || betAmount <= 0) {
+        return res.status(400).json({ message: 'Invalid bet amount' });
+      }
+      
+      if (!cashoutMultiplier || cashoutMultiplier <= 1) {
+        return res.status(400).json({ message: 'Invalid cashout multiplier' });
+      }
+      
+      if (!crashPoint || crashPoint <= 1) {
+        return res.status(400).json({ message: 'Invalid crash point' });
+      }
+      
+      // Get user
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      // Verify cashout is valid (less than crash point)
+      if (cashoutMultiplier > crashPoint) {
+        return res.status(400).json({ message: 'Invalid cashout: multiplier exceeds crash point' });
+      }
+      
+      // Calculate winnings
+      const winnings = betAmount * cashoutMultiplier;
+      const profit = winnings - betAmount;
+      
+      // Update user balance
+      const updatedUser = await storage.updateUserBalance(user.id, winnings);
+      
+      // Create game history record
+      await storage.createGameHistory({
+        userId: user.id,
+        gameType: 'crash',
+        betAmount,
+        multiplier: cashoutMultiplier,
+        outcome: profit,
+        gameData: JSON.stringify({
+          crashPoint,
+          cashoutMultiplier
+        })
+      });
+      
+      // Create transaction record
+      await storage.createTransaction({
+        userId: user.id,
+        type: 'win',
+        amount: profit
+      });
+      
+      // Return cashout result
+      res.status(200).json({
+        cashoutMultiplier,
+        winnings,
+        profit,
+        balance: updatedUser!.balance
+      });
+    } catch (error) {
+      res.status(500).json({ message: 'Error processing crash game cashout' });
+    }
+  });
+  
+  // Mines Game
+  app.post('/api/games/mines/new', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const { betAmount, minesCount, clientSeed } = req.body;
+      
+      if (!betAmount || betAmount <= 0) {
+        return res.status(400).json({ message: 'Invalid bet amount' });
+      }
+      
+      if (!minesCount || minesCount < 1 || minesCount > 24) {
+        return res.status(400).json({ message: 'Mines count must be between 1 and 24' });
       }
       
       if (!clientSeed) {
         return res.status(400).json({ message: 'Client seed is required' });
       }
       
-      // Get current user
-      const user = await storage.getUser(req.user.id);
-      
+      // Get user
+      const user = await storage.getUser(req.session.userId!);
       if (!user) {
         return res.status(404).json({ message: 'User not found' });
       }
       
-      // Check if user has enough balance
+      // Check if user has sufficient balance
       if (user.balance < betAmount) {
         return res.status(400).json({ message: 'Insufficient balance' });
       }
       
-      // Create server seed and hash it
-      const serverSeed = storage.generateServerSeed();
-      const serverSeedHashed = storage.hashServerSeed(serverSeed);
-      const nonce = Math.floor(Math.random() * 1000000);
-      
-      // Generate crash point
-      const crashPoint = generateCrashPoint(serverSeed, clientSeed, nonce);
-      
-      // Update user balance (-betAmount)
-      const updatedUser = await storage.updateUserBalance(req.user.id, -betAmount);
-      
-      // Determine if user won with auto-cashout
-      let won = false;
-      let cashoutMultiplier = 0;
-      let payout = 0;
-      
-      if (autoCashout && autoCashout < crashPoint) {
-        won = true;
-        cashoutMultiplier = autoCashout;
-        payout = Math.floor(betAmount * cashoutMultiplier);
-        
-        // Update user balance with winnings
-        await storage.updateUserBalance(req.user.id, payout);
+      // Get server seed
+      const serverSeedPair = await storage.getServerSeedPair(user.id);
+      if (!serverSeedPair) {
+        return res.status(500).json({ message: 'Error generating game result' });
       }
       
-      // Create game history record
-      await storage.createGameHistory({
-        userId: req.user.id,
-        gameType: 'crash',
+      // Deduct the bet amount
+      await storage.updateUserBalance(user.id, -betAmount);
+      
+      // Generate mine positions
+      const randomValue = calculateGameResult(serverSeedPair.seed, clientSeed, serverSeedPair.nonce, 'mines');
+      
+      // Create a shuffled array of 25 positions (0-24)
+      const positions = Array.from({ length: 25 }, (_, i) => i);
+      
+      // Fisher-Yates shuffle algorithm
+      const getShuffledPositions = (seed: number) => {
+        const result = [...positions];
+        for (let i = result.length - 1; i > 0; i--) {
+          // Use the randomValue and position to determine the swap
+          const j = Math.floor((randomValue * 10000 + i) % (i + 1));
+          [result[i], result[j]] = [result[j], result[i]];
+        }
+        return result;
+      };
+      
+      const shuffledPositions = getShuffledPositions(randomValue);
+      const minePositions = shuffledPositions.slice(0, minesCount);
+      
+      // Return game info
+      res.status(200).json({
+        gameId: serverSeedPair.id, // Use server seed ID as game ID
         betAmount,
-        multiplier: cashoutMultiplier,
-        payout,
-        result: { 
-          crashPoint,
-          autoCashout,
-          won,
-          cashoutMultiplier
-        },
-        clientSeed,
-        serverSeed,
-        serverSeedHashed,
-        nonce
-      });
-      
-      // Create transaction record
-      await storage.createTransaction({
-        userId: req.user.id,
-        type: 'bet',
-        amount: -betAmount,
-        gameType: 'crash',
-        meta: { autoCashout }
-      });
-      
-      if (won) {
-        await storage.createTransaction({
-          userId: req.user.id,
-          type: 'win',
-          amount: payout,
-          gameType: 'crash',
-          meta: { cashoutMultiplier }
-        });
-      }
-      
-      // If auto-cashout was used, return final result
-      if (autoCashout) {
-        const finalBalance = won ? updatedUser.balance + payout : updatedUser.balance;
-        
-        res.json({
-          crashPoint,
-          won,
-          cashoutMultiplier,
-          payout,
-          balance: finalBalance,
-          serverSeedHashed,
-          nonce
-        });
-      } else {
-        // For manual cashout, store game state in session
-        req.session.crashGame = {
-          betAmount,
-          crashPoint,
+        minesCount,
+        gameData: {
+          serverSeedHash: serverSeedPair.hash,
           clientSeed,
-          serverSeed,
-          serverSeedHashed,
-          nonce,
-          gameOver: false
-        };
-        
-        res.json({
-          message: 'Bet placed successfully',
-          balance: updatedUser.balance,
-          serverSeedHashed,
-          nonce
-        });
-      }
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-  
-  app.post('/api/games/crash/cashout', authenticateJWT, async (req, res) => {
-    try {
-      const { cashoutMultiplier } = req.body;
-      
-      if (!cashoutMultiplier || cashoutMultiplier < 1.01) {
-        return res.status(400).json({ message: 'Invalid cashout multiplier' });
-      }
-      
-      // Check if game is in progress
-      if (!req.session.crashGame) {
-        return res.status(400).json({ message: 'No active game' });
-      }
-      
-      // Check if game is over
-      if (req.session.crashGame.gameOver) {
-        return res.status(400).json({ message: 'Game is already over' });
-      }
-      
-      // Check if cashout is valid (not after crash)
-      if (cashoutMultiplier >= req.session.crashGame.crashPoint) {
-        return res.status(400).json({ message: 'Invalid cashout: game already crashed' });
-      }
-      
-      // Calculate payout
-      const payout = Math.floor(req.session.crashGame.betAmount * cashoutMultiplier);
-      
-      // Update user balance
-      const updatedUser = await storage.updateUserBalance(req.user.id, payout);
-      
-      // Update game history record
-      await storage.createGameHistory({
-        userId: req.user.id,
-        gameType: 'crash',
-        betAmount: req.session.crashGame.betAmount,
-        multiplier: cashoutMultiplier,
-        payout,
-        result: { 
-          crashPoint: req.session.crashGame.crashPoint,
-          won: true,
-          cashoutMultiplier
-        },
-        clientSeed: req.session.crashGame.clientSeed,
-        serverSeed: req.session.crashGame.serverSeed,
-        serverSeedHashed: req.session.crashGame.serverSeedHashed,
-        nonce: req.session.crashGame.nonce
+          nonce: serverSeedPair.nonce,
+          minePositions: minePositions
+        }
       });
       
-      // Create win transaction
-      await storage.createTransaction({
-        userId: req.user.id,
-        type: 'win',
-        amount: payout,
-        gameType: 'crash',
-        meta: { cashoutMultiplier }
-      });
-      
-      // Mark game as over
-      req.session.crashGame.gameOver = true;
-      
-      res.json({
-        message: 'Cashout successful',
-        crashPoint: req.session.crashGame.crashPoint,
-        cashoutMultiplier,
-        payout,
-        balance: updatedUser.balance
-      });
+      // Update server seed nonce
+      await storage.updateServerSeedNonce(serverSeedPair.id);
     } catch (error) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Error creating mines game' });
     }
   });
   
-  // Game history endpoints
-  app.get('/api/games/history', authenticateJWT, async (req, res) => {
+  app.post('/api/games/mines/reveal', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const history = await storage.getGameHistoryByUserId(req.user.id);
+      const { gameId, position, betAmount, minesCount, clientSeed, revealedPositions } = req.body;
       
-      res.json(history);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-  
-  app.get('/api/games/history/:type', authenticateJWT, async (req, res) => {
-    try {
-      const { type } = req.params;
-      
-      if (!['dice', 'mines', 'crash'].includes(type)) {
-        return res.status(400).json({ message: 'Invalid game type' });
+      if (!gameId || !position || position < 0 || position > 24) {
+        return res.status(400).json({ message: 'Invalid game parameters' });
       }
       
-      const history = await storage.getGameHistoryByType(type);
-      
-      res.json(history);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-  
-  // Admin endpoints
-  app.get('/api/admin/users', authenticateJWT, isAdmin, async (req, res) => {
-    try {
-      const users = await storage.getAllUsers();
-      
-      // Don't return passwords
-      const usersWithoutPasswords = users.map(user => {
-        const { password, ...userWithoutPassword } = user;
-        return userWithoutPassword;
-      });
-      
-      res.json(usersWithoutPasswords);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-  
-  app.get('/api/admin/transactions', authenticateJWT, isAdmin, async (req, res) => {
-    try {
-      const transactions = await storage.getAllTransactions();
-      
-      res.json(transactions);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-  
-  app.get('/api/admin/games/history', authenticateJWT, isAdmin, async (req, res) => {
-    try {
-      const history = await storage.getAllGameHistory();
-      
-      res.json(history);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-  
-  app.post('/api/admin/users/:id/balance', authenticateJWT, isAdmin, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { amount } = req.body;
-      
-      if (!amount) {
-        return res.status(400).json({ message: 'Amount is required' });
-      }
-      
-      const userId = parseInt(id);
-      
-      if (isNaN(userId)) {
-        return res.status(400).json({ message: 'Invalid user ID' });
-      }
-      
-      // Check if user exists
-      const user = await storage.getUser(userId);
-      
+      // Get user
+      const user = await storage.getUser(req.session.userId!);
       if (!user) {
         return res.status(404).json({ message: 'User not found' });
       }
       
+      // Check if the revealed position is a mine
+      const randomValue = calculateGameResult(req.body.serverSeed, clientSeed, req.body.nonce, 'mines');
+      
+      // Create shuffled positions
+      const positions = Array.from({ length: 25 }, (_, i) => i);
+      
+      // Fisher-Yates shuffle
+      const getShuffledPositions = (seed: number) => {
+        const result = [...positions];
+        for (let i = result.length - 1; i > 0; i--) {
+          const j = Math.floor((randomValue * 10000 + i) % (i + 1));
+          [result[i], result[j]] = [result[j], result[i]];
+        }
+        return result;
+      };
+      
+      const shuffledPositions = getShuffledPositions(randomValue);
+      const minePositions = shuffledPositions.slice(0, minesCount);
+      
+      const isHit = minePositions.includes(position);
+      
+      // Calculate multiplier based on revealed safe tiles
+      const totalTiles = 25;
+      const safeTiles = totalTiles - minesCount;
+      const revealedSafeTiles = revealedPositions.length + (isHit ? 0 : 1);
+      
+      // Calculate odds and multiplier
+      const calculateMultiplier = (revealed: number) => {
+        let mul = 1;
+        for (let i = 0; i < revealed; i++) {
+          mul *= (totalTiles - minesCount - i) / (totalTiles - i);
+        }
+        return 0.99 / mul; // 1% house edge
+      };
+      
+      const multiplier = calculateMultiplier(revealedSafeTiles);
+      
+      if (isHit) {
+        // The player hit a mine, game over
+        // Create game history record
+        await storage.createGameHistory({
+          userId: user.id,
+          gameType: 'mines',
+          betAmount,
+          multiplier: 0,
+          outcome: -betAmount,
+          gameData: JSON.stringify({
+            minesCount,
+            revealedSafeTiles: revealedSafeTiles - 1,
+            hitPosition: position,
+            minePositions
+          })
+        });
+        
+        // Create transaction record
+        await storage.createTransaction({
+          userId: user.id,
+          type: 'loss',
+          amount: -betAmount
+        });
+        
+        res.status(200).json({
+          isHit: true,
+          multiplier: 0,
+          potentialMultiplier: multiplier,
+          minePositions,
+          gameOver: true,
+          balance: user.balance
+        });
+      } else {
+        // The player revealed a gem (safe tile)
+        res.status(200).json({
+          isHit: false,
+          revealedSafeTiles,
+          multiplier,
+          potentialPayout: betAmount * multiplier,
+          gameOver: false
+        });
+      }
+    } catch (error) {
+      res.status(500).json({ message: 'Error revealing tile in mines game' });
+    }
+  });
+  
+  app.post('/api/games/mines/cashout', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const { gameId, betAmount, multiplier, minesCount, revealedPositions } = req.body;
+      
+      if (!gameId || !betAmount || !multiplier) {
+        return res.status(400).json({ message: 'Invalid game parameters' });
+      }
+      
+      // Get user
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      // Calculate winnings
+      const winnings = betAmount * multiplier;
+      const profit = winnings - betAmount;
+      
       // Update user balance
-      const updatedUser = await storage.updateUserBalance(userId, amount);
+      const updatedUser = await storage.updateUserBalance(user.id, winnings);
+      
+      // Create game history record
+      await storage.createGameHistory({
+        userId: user.id,
+        gameType: 'mines',
+        betAmount,
+        multiplier,
+        outcome: profit,
+        gameData: JSON.stringify({
+          minesCount,
+          revealedSafeTiles: revealedPositions.length,
+          cashout: true
+        })
+      });
+      
+      // Create transaction record
+      await storage.createTransaction({
+        userId: user.id,
+        type: 'win',
+        amount: profit
+      });
+      
+      // Return cashout result
+      res.status(200).json({
+        cashout: true,
+        multiplier,
+        winnings,
+        profit,
+        balance: updatedUser!.balance
+      });
+    } catch (error) {
+      res.status(500).json({ message: 'Error processing mines game cashout' });
+    }
+  });
+  
+  // Game History Routes
+  app.get('/api/games/history', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const gameHistory = await storage.getGameHistoryByUserId(req.session.userId!);
+      res.status(200).json(gameHistory);
+    } catch (error) {
+      res.status(500).json({ message: 'Error fetching game history' });
+    }
+  });
+  
+  // Provably Fair Routes
+  app.get('/api/provably-fair/seed', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const serverSeedPair = await storage.getServerSeedPair(req.session.userId!);
+      
+      if (!serverSeedPair) {
+        return res.status(404).json({ message: 'Server seed not found' });
+      }
+      
+      res.status(200).json({
+        hash: serverSeedPair.hash,
+        nonce: serverSeedPair.nonce
+      });
+    } catch (error) {
+      res.status(500).json({ message: 'Error fetching server seed' });
+    }
+  });
+  
+  app.post('/api/provably-fair/verify', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const { serverSeed, clientSeed, nonce, gameType } = req.body;
+      
+      if (!serverSeed || !clientSeed || nonce === undefined || !gameType) {
+        return res.status(400).json({ message: 'Missing verification parameters' });
+      }
+      
+      const hash = crypto.createHash('sha256').update(serverSeed).digest('hex');
+      const result = calculateGameResult(serverSeed, clientSeed, nonce, gameType);
+      
+      res.status(200).json({
+        serverSeedHash: hash,
+        result,
+        verified: true
+      });
+    } catch (error) {
+      res.status(500).json({ message: 'Error verifying game result' });
+    }
+  });
+  
+  app.post('/api/provably-fair/rotate-seed', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const serverSeedPair = await storage.getServerSeedPair(req.session.userId!);
+      
+      if (!serverSeedPair) {
+        return res.status(404).json({ message: 'Server seed not found' });
+      }
+      
+      // Mark the current seed as used and create a new one
+      const usedSeed = await storage.markServerSeedAsUsed(serverSeedPair.id);
+      
+      // Get the new seed pair
+      const newSeedPair = await storage.getServerSeedPair(req.session.userId!);
+      
+      res.status(200).json({
+        previousSeed: usedSeed?.seed,
+        previousHash: usedSeed?.hash,
+        newHash: newSeedPair?.hash
+      });
+    } catch (error) {
+      res.status(500).json({ message: 'Error rotating server seed' });
+    }
+  });
+  
+  // Admin Routes
+  app.get('/api/admin/users', adminMiddleware, async (req: Request, res: Response) => {
+    try {
+      const users = await storage.getAllUsers();
+      
+      // Remove passwords from the response
+      const sanitizedUsers = users.map(({ password, ...user }) => user);
+      
+      res.status(200).json(sanitizedUsers);
+    } catch (error) {
+      res.status(500).json({ message: 'Error fetching users' });
+    }
+  });
+  
+  app.get('/api/admin/game-history', adminMiddleware, async (req: Request, res: Response) => {
+    try {
+      const gameHistory = await storage.getAllGameHistory();
+      res.status(200).json(gameHistory);
+    } catch (error) {
+      res.status(500).json({ message: 'Error fetching game history' });
+    }
+  });
+  
+  app.get('/api/admin/transactions', adminMiddleware, async (req: Request, res: Response) => {
+    try {
+      const transactions = await storage.getAllTransactions();
+      res.status(200).json(transactions);
+    } catch (error) {
+      res.status(500).json({ message: 'Error fetching transactions' });
+    }
+  });
+  
+  app.post('/api/admin/reset-balance', adminMiddleware, async (req: Request, res: Response) => {
+    try {
+      const { userId, balance } = req.body;
+      
+      if (!userId || balance === undefined) {
+        return res.status(400).json({ message: 'User ID and balance are required' });
+      }
+      
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      // Calculate the adjustment needed
+      const adjustment = balance - user.balance;
+      
+      // Update user balance
+      const updatedUser = await storage.updateUserBalance(userId, adjustment);
       
       // Create transaction record
       await storage.createTransaction({
         userId,
-        type: amount > 0 ? 'deposit' : 'withdraw',
-        amount,
-        gameType: null,
-        meta: { adminAction: true, adminId: req.user.id }
+        type: 'admin_adjustment',
+        amount: adjustment
       });
       
-      res.json({ 
-        message: 'Balance updated successfully',
-        user: {
-          id: updatedUser.id,
-          username: updatedUser.username,
-          balance: updatedUser.balance
-        }
+      res.status(200).json({
+        userId,
+        previousBalance: user.balance,
+        newBalance: updatedUser!.balance
       });
     } catch (error) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Error resetting user balance' });
     }
   });
-
-  const httpServer = createServer(app);
-
+  
   return httpServer;
 }

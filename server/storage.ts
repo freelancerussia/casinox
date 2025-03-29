@@ -1,9 +1,8 @@
-import { users, type User, type InsertUser, type Transaction, type InsertTransaction, type GameHistory, type InsertGameHistory } from "@shared/schema";
-import * as crypto from 'crypto';
+import { users, gameHistory, transactions, serverSeeds, type User, type InsertUser, type GameHistory, type InsertGameHistory, type Transaction, type InsertTransaction, type ServerSeed, type InsertServerSeed } from "@shared/schema";
+import * as crypto from "crypto";
 
-// Define your interfaces
 export interface IStorage {
-  // Users
+  // User operations
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
@@ -11,98 +10,95 @@ export interface IStorage {
   updateUserBalance(id: number, amount: number): Promise<User | undefined>;
   getAllUsers(): Promise<User[]>;
   
-  // Transactions
-  createTransaction(transaction: InsertTransaction): Promise<Transaction>;
-  getTransactionsByUserId(userId: number): Promise<Transaction[]>;
-  getAllTransactions(): Promise<Transaction[]>;
-  
-  // Game History
-  createGameHistory(gameHistory: InsertGameHistory): Promise<GameHistory>;
+  // Game history operations
+  createGameHistory(history: InsertGameHistory): Promise<GameHistory>;
   getGameHistoryByUserId(userId: number, limit?: number): Promise<GameHistory[]>;
-  getGameHistoryByType(gameType: string, limit?: number): Promise<GameHistory[]>;
   getAllGameHistory(limit?: number): Promise<GameHistory[]>;
   
-  // Game-specific helper methods
-  generateServerSeed(): string;
-  hashServerSeed(seed: string): string;
+  // Transaction operations
+  createTransaction(transaction: InsertTransaction): Promise<Transaction>;
+  getUserTransactions(userId: number, limit?: number): Promise<Transaction[]>;
+  getAllTransactions(limit?: number): Promise<Transaction[]>;
+  
+  // Provably fair operations
+  createServerSeed(seed: InsertServerSeed): Promise<ServerSeed>;
+  getServerSeedPair(userId: number): Promise<ServerSeed | undefined>;
+  updateServerSeedNonce(id: number): Promise<ServerSeed | undefined>;
+  markServerSeedAsUsed(id: number): Promise<ServerSeed | undefined>;
 }
 
 export class MemStorage implements IStorage {
   private users: Map<number, User>;
+  private gameHistories: Map<number, GameHistory>;
   private transactions: Map<number, Transaction>;
-  private gameHistory: Map<number, GameHistory>;
-  private userIdCounter: number;
-  private transactionIdCounter: number;
-  private gameHistoryIdCounter: number;
+  private serverSeeds: Map<number, ServerSeed>;
+  private currentId: { users: number; gameHistories: number; transactions: number; serverSeeds: number };
 
   constructor() {
     this.users = new Map();
+    this.gameHistories = new Map();
     this.transactions = new Map();
-    this.gameHistory = new Map();
-    this.userIdCounter = 1;
-    this.transactionIdCounter = 1;
-    this.gameHistoryIdCounter = 1;
+    this.serverSeeds = new Map();
+    this.currentId = { users: 1, gameHistories: 1, transactions: 1, serverSeeds: 1 };
     
-    // Create admin user
+    // Create default admin user
     this.createUser({
       username: "admin",
       password: "admin123",
-      email: "admin@cryptoplay.com",
-      avatarInitial: "A"
-    }).then(user => {
-      // Update user as admin with higher balance
-      const adminUser = { ...user, isAdmin: true, balance: 10000 };
-      this.users.set(user.id, adminUser);
+      email: "admin@casinox.com",
+      balance: 10000,
+      isAdmin: true
     });
   }
 
-  // User methods
+  // User operations
   async getUser(id: number): Promise<User | undefined> {
     return this.users.get(id);
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
     return Array.from(this.users.values()).find(
-      (user) => user.username === username,
+      (user) => user.username.toLowerCase() === username.toLowerCase(),
     );
   }
-  
+
   async getUserByEmail(email: string): Promise<User | undefined> {
     return Array.from(this.users.values()).find(
-      (user) => user.email === email,
+      (user) => user.email.toLowerCase() === email.toLowerCase(),
     );
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = this.userIdCounter++;
-    const now = new Date();
-    const avatarInitial = insertUser.avatarInitial || insertUser.username.charAt(0).toUpperCase();
+    const id = this.currentId.users++;
     
-    const user: User = { 
-      ...insertUser, 
+    // Create a properly typed User object with all required fields
+    const user: User = {
       id,
-      avatarInitial,
-      isAdmin: false,
-      balance: 1000, // Default starting balance
-      createdAt: now
+      username: insertUser.username,
+      password: insertUser.password,
+      email: insertUser.email,
+      balance: insertUser.balance !== undefined ? insertUser.balance : 1000, // Default to 1000 if not provided
+      isAdmin: insertUser.isAdmin !== undefined ? insertUser.isAdmin : false // Default to false if not provided
     };
-    
     this.users.set(id, user);
     
-    // Create initial deposit transaction
-    await this.createTransaction({
+    // Create initial server seed for the user
+    const serverSeed = crypto.randomBytes(32).toString("hex");
+    const hash = crypto.createHash("sha256").update(serverSeed).digest("hex");
+    
+    this.createServerSeed({
       userId: id,
-      type: "deposit",
-      amount: 1000,
-      gameType: null,
-      meta: { initial: true }
+      seed: serverSeed,
+      hash: hash,
+      used: false,
+      nonce: 0
     });
     
     return user;
   }
-  
+
   async updateUserBalance(id: number, amount: number): Promise<User | undefined> {
-    const user = await this.getUser(id);
+    const user = this.users.get(id);
     if (!user) return undefined;
     
     const updatedUser = { ...user, balance: user.balance + amount };
@@ -113,75 +109,124 @@ export class MemStorage implements IStorage {
   async getAllUsers(): Promise<User[]> {
     return Array.from(this.users.values());
   }
-  
-  // Transaction methods
-  async createTransaction(insertTransaction: InsertTransaction): Promise<Transaction> {
-    const id = this.transactionIdCounter++;
-    const now = new Date();
+
+  // Game history operations
+  async createGameHistory(insertHistory: InsertGameHistory): Promise<GameHistory> {
+    const id = this.currentId.gameHistories++;
+    const timestamp = new Date();
     
-    const transaction: Transaction = {
-      ...insertTransaction,
+    // Create a properly typed GameHistory object with all required fields
+    const history: GameHistory = {
       id,
-      timestamp: now
+      userId: insertHistory.userId,
+      gameType: insertHistory.gameType,
+      betAmount: insertHistory.betAmount,
+      multiplier: insertHistory.multiplier,
+      outcome: insertHistory.outcome,
+      timestamp,
+      gameData: insertHistory.gameData || null // Ensure gameData is null if not provided
     };
+    this.gameHistories.set(id, history);
+    return history;
+  }
+
+  async getGameHistoryByUserId(userId: number, limit: number = 50): Promise<GameHistory[]> {
+    return Array.from(this.gameHistories.values())
+      .filter((history) => history.userId === userId)
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      .slice(0, limit);
+  }
+  
+  async getAllGameHistory(limit: number = 100): Promise<GameHistory[]> {
+    return Array.from(this.gameHistories.values())
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      .slice(0, limit);
+  }
+
+  // Transaction operations
+  async createTransaction(insertTransaction: InsertTransaction): Promise<Transaction> {
+    const id = this.currentId.transactions++;
+    const timestamp = new Date();
     
+    // Create a properly typed Transaction object with all required fields
+    const transaction: Transaction = {
+      id,
+      userId: insertTransaction.userId,
+      type: insertTransaction.type,
+      amount: insertTransaction.amount,
+      timestamp
+    };
     this.transactions.set(id, transaction);
     return transaction;
   }
-  
-  async getTransactionsByUserId(userId: number): Promise<Transaction[]> {
+
+  async getUserTransactions(userId: number, limit: number = 50): Promise<Transaction[]> {
     return Array.from(this.transactions.values())
-      .filter(transaction => transaction.userId === userId)
-      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+      .filter((transaction) => transaction.userId === userId)
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      .slice(0, limit);
   }
   
-  async getAllTransactions(): Promise<Transaction[]> {
+  async getAllTransactions(limit: number = 100): Promise<Transaction[]> {
     return Array.from(this.transactions.values())
-      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      .slice(0, limit);
   }
-  
-  // Game History methods
-  async createGameHistory(insertGameHistory: InsertGameHistory): Promise<GameHistory> {
-    const id = this.gameHistoryIdCounter++;
-    const now = new Date();
+
+  // Server seed operations
+  async createServerSeed(insertSeed: InsertServerSeed): Promise<ServerSeed> {
+    const id = this.currentId.serverSeeds++;
+    const createdAt = new Date();
     
-    const gameHistory: GameHistory = {
-      ...insertGameHistory,
+    // Create a properly typed ServerSeed object with all required fields
+    const serverSeed: ServerSeed = {
       id,
-      timestamp: now
+      userId: insertSeed.userId,
+      seed: insertSeed.seed,
+      hash: insertSeed.hash,
+      used: insertSeed.used !== undefined ? insertSeed.used : false, // Default to false if not provided
+      nonce: insertSeed.nonce !== undefined ? insertSeed.nonce : 0, // Default to 0 if not provided
+      createdAt
     };
+    this.serverSeeds.set(id, serverSeed);
+    return serverSeed;
+  }
+
+  async getServerSeedPair(userId: number): Promise<ServerSeed | undefined> {
+    return Array.from(this.serverSeeds.values())
+      .filter((seed) => seed.userId === userId && !seed.used)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+  }
+
+  async updateServerSeedNonce(id: number): Promise<ServerSeed | undefined> {
+    const serverSeed = this.serverSeeds.get(id);
+    if (!serverSeed) return undefined;
     
-    this.gameHistory.set(id, gameHistory);
-    return gameHistory;
+    const updatedSeed = { ...serverSeed, nonce: serverSeed.nonce + 1 };
+    this.serverSeeds.set(id, updatedSeed);
+    return updatedSeed;
   }
-  
-  async getGameHistoryByUserId(userId: number, limit = 20): Promise<GameHistory[]> {
-    return Array.from(this.gameHistory.values())
-      .filter(history => history.userId === userId)
-      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
-      .slice(0, limit);
-  }
-  
-  async getGameHistoryByType(gameType: string, limit = 20): Promise<GameHistory[]> {
-    return Array.from(this.gameHistory.values())
-      .filter(history => history.gameType === gameType)
-      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
-      .slice(0, limit);
-  }
-  
-  async getAllGameHistory(limit = 50): Promise<GameHistory[]> {
-    return Array.from(this.gameHistory.values())
-      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
-      .slice(0, limit);
-  }
-  
-  // Game-specific helper methods
-  generateServerSeed(): string {
-    return crypto.randomBytes(32).toString('hex');
-  }
-  
-  hashServerSeed(seed: string): string {
-    return crypto.createHash('sha256').update(seed).digest('hex');
+
+  async markServerSeedAsUsed(id: number): Promise<ServerSeed | undefined> {
+    const serverSeed = this.serverSeeds.get(id);
+    if (!serverSeed) return undefined;
+    
+    const updatedSeed = { ...serverSeed, used: true };
+    this.serverSeeds.set(id, updatedSeed);
+    
+    // Create a new server seed for the user
+    const newServerSeed = crypto.randomBytes(32).toString("hex");
+    const hash = crypto.createHash("sha256").update(newServerSeed).digest("hex");
+    
+    this.createServerSeed({
+      userId: serverSeed.userId,
+      seed: newServerSeed,
+      hash: hash,
+      used: false,
+      nonce: 0
+    });
+    
+    return updatedSeed;
   }
 }
 
