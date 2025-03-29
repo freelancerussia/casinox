@@ -650,7 +650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const shuffledPositions = getShuffledPositions(randomValue);
       const minePositions = shuffledPositions.slice(0, minesCount);
       
-      // Return game info
+      // Return game info (without revealing mine positions)
       res.status(200).json({
         gameId: serverSeedPair.id, // Use server seed ID as game ID
         betAmount,
@@ -658,8 +658,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         gameData: {
           serverSeedHash: serverSeedPair.hash,
           clientSeed,
-          nonce: serverSeedPair.nonce,
-          minePositions: minePositions
+          nonce: serverSeedPair.nonce
         }
       });
       
@@ -674,7 +673,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { gameId, position, betAmount, minesCount, clientSeed, revealedPositions } = req.body;
       
-      if (!gameId || !position || position < 0 || position > 24) {
+      if (!gameId || position === undefined || position < 0 || position > 24) {
         return res.status(400).json({ message: 'Invalid game parameters' });
       }
       
@@ -684,8 +683,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: 'User not found' });
       }
       
+      // Get server seed from storage (based on gameId as we're using it to reference the seed)
+      const serverSeedPair = await storage.getServerSeedPair(user.id);
+      if (!serverSeedPair) {
+        return res.status(500).json({ message: 'Error retrieving server seed' });
+      }
+      
       // Check if the revealed position is a mine
-      const randomValue = calculateGameResult(req.body.serverSeed, clientSeed, req.body.nonce, 'mines');
+      const randomValue = calculateGameResult(serverSeedPair.seed, clientSeed, serverSeedPair.nonce, 'mines');
       
       // Create shuffled positions
       const positions = Array.from({ length: 25 }, (_, i) => i);

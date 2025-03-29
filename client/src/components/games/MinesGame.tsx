@@ -116,7 +116,6 @@ export default function MinesGame({ appState }: MinesGameProps) {
       // Save game data
       setServerSeed(data.gameData.serverSeedHash);
       setNonce(data.gameData.nonce);
-      setMinePositions(data.gameData.minePositions);
       setGameId(data.gameId);
       
       // Generate new client seed for next game
@@ -162,8 +161,6 @@ export default function MinesGame({ appState }: MinesGameProps) {
         betAmount,
         minesCount,
         clientSeed,
-        serverSeed,
-        nonce,
         revealedPositions
       });
       
