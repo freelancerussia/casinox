@@ -106,6 +106,7 @@ export default function MinesGame({ appState }: MinesGameProps) {
       });
       
       const data = await res.json();
+      console.log("Game data received:", data);
       
       // Update user balance
       appState.setUser({
@@ -116,16 +117,8 @@ export default function MinesGame({ appState }: MinesGameProps) {
       // Save game data
       setServerSeed(data.gameData.serverSeedHash);
       setNonce(data.gameData.nonce);
-      setGameId(data.gameId);
       
-      // Generate new client seed for next game
-      setClientSeed(generateClientSeed());
-      
-      // IMPORTANT: Set game as active
-      setIsGameActive(true);
-      setGameOver(false);
-      
-      // Reset game state
+      // Reset game state BEFORE setting active status
       setGrid(Array(25).fill(null).map((_, i) => ({
         index: i,
         revealed: false,
@@ -134,6 +127,11 @@ export default function MinesGame({ appState }: MinesGameProps) {
       })));
       setRevealedPositions([]);
       setTotalProfit(0);
+      
+      // IMPORTANT: Set game as active and set game ID - do this last
+      setGameId(data.gameId);
+      setIsGameActive(true);
+      setGameOver(false);
       
       console.log("Game started successfully!", { 
         gameId: data.gameId, 
@@ -146,6 +144,7 @@ export default function MinesGame({ appState }: MinesGameProps) {
       });
       
     } catch (error) {
+      console.error("Game start error:", error);
       toast({
         title: "Error",
         description: "There was an error starting the game",
@@ -161,6 +160,17 @@ export default function MinesGame({ appState }: MinesGameProps) {
     
     if (!isGameActive || gameOver) {
       console.log("Game not active or already over, ignoring click");
+      return;
+    }
+    
+    // Make sure game ID is set
+    if (gameId === null) {
+      console.error("Cannot reveal cell - missing game ID");
+      toast({
+        title: "Game Error",
+        description: "There was an issue with the game state. Please restart.",
+        variant: "destructive",
+      });
       return;
     }
     
