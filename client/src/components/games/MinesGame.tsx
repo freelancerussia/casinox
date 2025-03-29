@@ -99,6 +99,11 @@ export default function MinesGame({ appState }: MinesGameProps) {
     }
     
     try {
+      // First set game to inactive state to avoid any rendering issues
+      setIsGameActive(false);
+      setGameOver(false);
+      setGameId(null);
+      
       const res = await apiRequest("POST", "/api/games/mines/new", {
         betAmount,
         minesCount,
@@ -114,10 +119,6 @@ export default function MinesGame({ appState }: MinesGameProps) {
         balance: user.balance - betAmount
       });
       
-      // Save game data
-      setServerSeed(data.gameData.serverSeedHash);
-      setNonce(data.gameData.nonce);
-      
       // Reset game state BEFORE setting active status
       setGrid(Array(25).fill(null).map((_, i) => ({
         index: i,
@@ -128,15 +129,18 @@ export default function MinesGame({ appState }: MinesGameProps) {
       setRevealedPositions([]);
       setTotalProfit(0);
       
-      // IMPORTANT: Set game as active and set game ID - do this last
-      setGameId(data.gameId);
-      setIsGameActive(true);
-      setGameOver(false);
+      // Store game data
+      const newGameId = data.gameId;
+      setGameId(newGameId);
+      setServerSeed(data.gameData.serverSeedHash);
+      setNonce(data.gameData.nonce);
       
-      console.log("Game started successfully!", { 
-        gameId: data.gameId, 
-        isActive: true 
-      });
+      // IMPORTANT: Use a setTimeout to ensure the gameId is set before activating the game
+      // This breaks out of React's batching and ensures the state is updated
+      setTimeout(() => {
+        setIsGameActive(true);
+        console.log("Game activated with ID:", newGameId);
+      }, 50);
       
       toast({
         title: "New Game Started",
@@ -156,10 +160,15 @@ export default function MinesGame({ appState }: MinesGameProps) {
   // Handle revealing a cell
   const handleRevealCell = async (index: number) => {
     console.log("Click detected on cell:", index);
-    console.log("Game state:", { isGameActive, gameOver, gameId });
     
-    if (!isGameActive || gameOver) {
-      console.log("Game not active or already over, ignoring click");
+    // Force check the state again just to be sure (React state updates may not be reflected yet)
+    if (!isGameActive) {
+      console.log("Game is not active, cannot reveal cell");
+      return;
+    }
+    
+    if (gameOver) {
+      console.log("Game is already over, cannot reveal cell");
       return;
     }
     
@@ -181,7 +190,7 @@ export default function MinesGame({ appState }: MinesGameProps) {
     }
     
     try {
-      console.log("Revealing cell at index:", index, "with gameId:", gameId);
+      console.log("Attempting to reveal cell at index:", index, "with gameId:", gameId);
       const res = await apiRequest("POST", "/api/games/mines/reveal", {
         gameId,
         position: index,
@@ -269,6 +278,17 @@ export default function MinesGame({ appState }: MinesGameProps) {
     if (!isGameActive || gameOver || revealedPositions.length === 0) return;
     
     try {
+      // Ensure we have a valid game ID
+      if (gameId === null) {
+        console.error("Cannot cashout - missing game ID");
+        toast({
+          title: "Game Error",
+          description: "There was an issue with the game state. Please restart.",
+          variant: "destructive",
+        });
+        return;
+      }
+      
       const res = await apiRequest("POST", "/api/games/mines/cashout", {
         gameId,
         betAmount,
@@ -294,6 +314,7 @@ export default function MinesGame({ appState }: MinesGameProps) {
       });
       
     } catch (error) {
+      console.error("Error cashing out:", error);
       toast({
         title: "Error",
         description: "There was an error cashing out",
@@ -302,6 +323,21 @@ export default function MinesGame({ appState }: MinesGameProps) {
     }
   };
   
+  // Add a useEffect to debug state changes
+  useEffect(() => {
+    console.log("Game state updated:", { isGameActive, gameId, gameOver });
+  }, [isGameActive, gameId, gameOver]);
+
+  // Add test handlers to ensure clicks are working
+  const forceRevealCell = (index: number) => {
+    console.log("Force reveal cell at index:", index);
+    if (isGameActive && gameId !== null) {
+      handleRevealCell(index);
+    } else {
+      console.log("Cannot reveal - game not active");
+    }
+  };
+
   return (
     <div className="bg-secondary rounded-xl p-6 border border-neutral-border">
       <div className="flex justify-between items-center mb-6">
@@ -434,7 +470,7 @@ export default function MinesGame({ appState }: MinesGameProps) {
         {/* Game Visualization */}
         <div className="lg:col-span-2 bg-primary rounded-lg p-4 h-full flex flex-col">
           <div className="flex-grow">
-            {gameId && (
+            {gameId !== null && (
               <div className="mb-3 text-xs text-gray-400">
                 Game ID: {gameId} | Game Active: {isGameActive ? "Yes" : "No"} | 
                 Revealed Positions: {revealedPositions.length}
@@ -444,7 +480,10 @@ export default function MinesGame({ appState }: MinesGameProps) {
               {grid.map((cell) => (
                 <button
                   key={cell.index}
-                  onClick={() => handleRevealCell(cell.index)}
+                  onClick={() => isGameActive ? handleRevealCell(cell.index) : null}
+                  onTouchStart={() => isGameActive ? forceRevealCell(cell.index) : null}
+                  data-active={isGameActive}
+                  data-index={cell.index}
                   className={`aspect-square rounded-lg flex items-center justify-center transition-all duration-200 border ${
                     cell.revealed
                       ? cell.isGem
