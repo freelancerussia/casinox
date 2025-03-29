@@ -41,10 +41,11 @@ export class MemStorage implements IStorage {
     this.serverSeeds = new Map();
     this.currentId = { users: 1, gameHistories: 1, transactions: 1, serverSeeds: 1 };
     
-    // Create default admin user
+    // Create default admin user with hashed password
+    const hashedPassword = crypto.createHash('sha256').update('admin123').digest('hex');
     this.createUser({
       username: "admin",
-      password: "admin123",
+      password: hashedPassword,
       email: "admin@casinox.com",
       balance: 10000,
       isAdmin: true

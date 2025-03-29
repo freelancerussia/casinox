@@ -422,6 +422,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Deduct the bet amount first
       await storage.updateUserBalance(user.id, -betAmount);
       
+      // Broadcast player bet to all clients
+      broadcastGameEvent('player_bet', {
+        username: user.username,
+        betAmount,
+        autoCashout
+      });
+      
       // Return crash point and player bet info
       res.status(200).json({
         crashPoint,
@@ -436,6 +443,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Update server seed nonce
       await storage.updateServerSeedNonce(serverSeedPair.id);
+      
+      // Schedule crash result broadcast (for demo purposes)
+      if (Math.random() > 0.7) { // 30% chance to simulate other players playing
+        setTimeout(() => {
+          broadcastGameEvent('crash_result', {
+            crashPoint
+          });
+        }, crashPoint * 5000); // Simulate crash after time corresponding to the crash point
+      }
     } catch (error) {
       res.status(500).json({ message: 'Error processing crash game bet' });
     }
@@ -493,6 +509,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userId: user.id,
         type: 'win',
         amount: profit
+      });
+      
+      // Broadcast player cashout to all clients
+      broadcastGameEvent('player_cashout', {
+        username: user.username,
+        cashoutMultiplier,
+        betAmount
       });
       
       // Return cashout result

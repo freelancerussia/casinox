@@ -13,6 +13,7 @@ import Admin from "@/pages/admin";
 import { useEffect, useState } from "react";
 import { apiRequest } from "./lib/queryClient";
 import { User } from "@shared/schema";
+import { initWebSocket } from "./lib/websocket";
 
 export type AppState = {
   user: User | null;
@@ -53,6 +54,7 @@ function Router() {
     <Switch>
       <Route path="/" component={() => <Dashboard appState={appState} />} />
       <Route path="/login" component={() => <Login appState={appState} />} />
+      <Route path="/register" component={() => <Login appState={appState} />} />
       <Route path="/dice" component={() => <Dice appState={appState} />} />
       <Route path="/crash" component={() => <Crash appState={appState} />} />
       <Route path="/mines" component={() => <Mines appState={appState} />} />
@@ -64,6 +66,11 @@ function Router() {
 }
 
 function App() {
+  // Initialize WebSocket connection
+  useEffect(() => {
+    initWebSocket();
+  }, []);
+  
   return (
     <QueryClientProvider client={queryClient}>
       <Router />

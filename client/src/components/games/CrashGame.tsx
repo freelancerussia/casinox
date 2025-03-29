@@ -7,6 +7,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { AppState } from "@/App";
 import { useLocation } from "wouter";
 import { generateClientSeed } from "@/lib/provably-fair";
+import { addEventListener, removeEventListener, sendMessage } from "@/lib/websocket";
 
 interface CrashGameProps {
   appState: AppState;
@@ -60,6 +61,49 @@ export default function CrashGame({ appState }: CrashGameProps) {
       setHasAutoCashedOut(true);
     }
   }, [isPlaying, currentMultiplier, autoCashout, hasAutoCashedOut]);
+  
+  // WebSocket event listeners
+  useEffect(() => {
+    // Handler for player bet events
+    const handlePlayerBet = (data: any) => {
+      setActivePlayers(prev => [
+        {
+          username: data.username,
+          betAmount: data.betAmount,
+          status: "active"
+        },
+        ...prev
+      ]);
+    };
+    
+    // Handler for player cashout events
+    const handlePlayerCashout = (data: any) => {
+      setActivePlayers(prev => 
+        prev.map(player => 
+          player.username === data.username
+            ? { ...player, status: "cashed_out", cashoutMultiplier: data.cashoutMultiplier }
+            : player
+        )
+      );
+    };
+    
+    // Handler for crash events
+    const handleCrashEvent = (data: any) => {
+      setRecentCrashes(prev => [data.crashPoint, ...prev.slice(0, 5)]);
+    };
+    
+    // Register WebSocket event listeners
+    addEventListener("player_bet", handlePlayerBet);
+    addEventListener("player_cashout", handlePlayerCashout);
+    addEventListener("crash_result", handleCrashEvent);
+    
+    // Cleanup event listeners on unmount
+    return () => {
+      removeEventListener("player_bet", handlePlayerBet);
+      removeEventListener("player_cashout", handlePlayerCashout);
+      removeEventListener("crash_result", handleCrashEvent);
+    };
+  }, []);
   
   // Handle crash animation
   const animateCrash = (targetCrashPoint: number) => {
