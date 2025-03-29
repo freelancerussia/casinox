@@ -211,13 +211,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log('Auth middleware check - Session ID:', req.sessionID);
     console.log('Auth middleware check - User ID in session:', req.session.userId);
     
-    // Check if auth header is present as a fallback
+    // Track authentication method for logging
+    let authMethod = 'none';
+    let userId = null;
+    
+    // Check if auth header is present (token-based auth)
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
+      authMethod = 'token';
       const token = authHeader.substring(7);
       try {
         // Simple token validation (in a real app, use JWT or proper token validation)
-        const userId = parseInt(token);
+        userId = parseInt(token);
         if (!isNaN(userId)) {
           // Verify the user exists in storage before proceeding
           const user = await storage.getUser(userId);
@@ -225,48 +230,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Set session data from token
             req.session.userId = userId;
             req.session.isAdmin = user.isAdmin || false;
+            req.session.username = user.username;
             console.log('Using token-based authentication, userId:', userId);
             return next();
           } else {
-            console.error('Token validation failed: User not found');
+            console.error('Token validation failed: User not found for ID', userId);
             return res.status(401).json({ message: 'Authentication failed: User not found' });
           }
+        } else {
+          console.error('Token validation failed: Invalid token format', token);
+          // Continue to try session-based auth as fallback
         }
       } catch (error) {
         console.error('Token validation error:', error);
+        // Continue to try session-based auth as fallback
       }
     }
     
     // Fall back to session-based auth if token is invalid or not present
-    if (!req.session.userId) {
-      return res.status(401).json({ message: 'Not authenticated' });
-    }
-    
-    // For session-based auth, verify user exists
-    try {
-      const user = await storage.getUser(req.session.userId);
-      if (!user) {
-        req.session.destroy(() => {});
-        return res.status(401).json({ message: 'Authentication failed: User not found' });
+    if (req.session.userId) {
+      authMethod = 'session';
+      userId = req.session.userId;
+      
+      // For session-based auth, verify user exists
+      try {
+        const user = await storage.getUser(req.session.userId);
+        if (user) {
+          console.log('Using session-based authentication, userId:', req.session.userId);
+          return next();
+        } else {
+          console.error('Session validation failed: User not found for ID', req.session.userId);
+          req.session.destroy(() => {});
+          return res.status(401).json({ message: 'Authentication failed: User not found' });
+        }
+      } catch (error) {
+        console.error('Session validation error:', error);
+        return res.status(500).json({ message: 'Server error during authentication' });
       }
-    } catch (error) {
-      console.error('Session validation error:', error);
-      return res.status(500).json({ message: 'Server error during authentication' });
     }
     
-    next();
+    // If we get here, neither token nor session auth succeeded
+    console.error('Authentication failed: No valid session or token');
+    return res.status(401).json({ message: 'Not authenticated' });
   };
   
   // Admin middleware
   const adminMiddleware = async (req: Request, res: Response, next: Function) => {
     // First apply authentication middleware
     await authMiddleware(req, res, async () => {
-      // Then check if the user is an admin
-      const user = await storage.getUser(req.session.userId!);
-      if (!user?.isAdmin) {
-        return res.status(403).json({ message: 'Access denied: Admin privileges required' });
+      try {
+        // Then check if the user is an admin
+        const user = await storage.getUser(req.session.userId!);
+        if (!user) {
+          console.error('Admin middleware failed: User not found for ID', req.session.userId);
+          return res.status(404).json({ message: 'User not found' });
+        }
+        
+        if (!user.isAdmin) {
+          console.error('Admin access denied for user', user.username);
+          return res.status(403).json({ message: 'Access denied: Admin privileges required' });
+        }
+        
+        console.log('Admin access granted for user', user.username);
+        next();
+      } catch (error) {
+        console.error('Admin middleware error:', error);
+        return res.status(500).json({ message: 'Server error during admin verification' });
       }
-      next();
     });
   };
   
