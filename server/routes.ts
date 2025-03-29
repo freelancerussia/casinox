@@ -66,6 +66,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   };
   
+  // Debug route to check stored users
+  app.get('/api/debug/users', async (req: Request, res: Response) => {
+    try {
+      const allUsers = await storage.getAllUsers();
+      const sanitizedUsers = allUsers.map(user => {
+        const { password, ...userWithoutPassword } = user;
+        return userWithoutPassword;
+      });
+      res.status(200).json(sanitizedUsers);
+    } catch (error) {
+      res.status(500).json({ message: 'Error fetching users' });
+    }
+  });
+
   // Authentication Routes
   app.post('/api/auth/register', async (req: Request, res: Response) => {
     try {
