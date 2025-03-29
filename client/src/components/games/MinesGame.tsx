@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
@@ -27,6 +27,11 @@ export default function MinesGame({ appState }: MinesGameProps) {
   
   const [betAmount, setBetAmount] = useState(15);
   const [minesCount, setMinesCount] = useState(5);
+  // Use useRef for state that doesn't trigger re-renders
+  const gameActiveRef = useRef(false);
+  const gameIdRef = useRef<number | null>(null);
+  
+  // Regular state for UI updates
   const [isGameActive, setIsGameActive] = useState(false);
   const [gameOver, setGameOver] = useState(false);
   const [grid, setGrid] = useState<MineCell[]>(Array(25).fill(null).map((_, i) => ({
@@ -134,19 +139,22 @@ export default function MinesGame({ appState }: MinesGameProps) {
       setServerSeed(data.gameData.serverSeedHash);
       setNonce(data.gameData.nonce);
       
-      // IMPORTANT: Use a different approach with state update patterns to ensure consistency
-      // First store game ID in state
+      // IMPORTANT: Use both React state and refs to ensure consistency
+      // First update refs (which are synchronous and immediately available)
+      gameIdRef.current = newGameId;
+      gameActiveRef.current = true;
+      
+      // Then update React state for UI rendering
       setGameId(newGameId);
       
-      // Then use a timeout to make sure state updates are processed
+      // Use a timeout to ensure the state updates are processed in the UI
       setTimeout(() => {
-        // Double-check gameId is set properly
         console.log("Setting game active with ID:", newGameId);
-        // Set game active as a separate operation
         setIsGameActive(true);
+        
         // Force a UI update after everything is set
         setTimeout(() => {
-          console.log("Game active check:", isGameActive);
+          console.log("Game active check - State:", isGameActive, "Ref:", gameActiveRef.current);
           // Force update grid to make tiles clickable
           setGrid(prev => [...prev]);
         }, 100);
@@ -171,9 +179,9 @@ export default function MinesGame({ appState }: MinesGameProps) {
   const handleRevealCell = async (index: number) => {
     console.log("Click detected on cell:", index);
     
-    // Force check the state again just to be sure (React state updates may not be reflected yet)
-    if (!isGameActive) {
-      console.log("Game is not active, cannot reveal cell");
+    // Use ref for consistent state access, React state updates may not be reflected yet
+    if (!gameActiveRef.current) {
+      console.log("Game is not active (ref check), cannot reveal cell");
       return;
     }
     
@@ -182,9 +190,9 @@ export default function MinesGame({ appState }: MinesGameProps) {
       return;
     }
     
-    // Make sure game ID is set
-    if (gameId === null) {
-      console.error("Cannot reveal cell - missing game ID");
+    // Make sure game ID is set - use ref for consistency
+    if (gameIdRef.current === null) {
+      console.error("Cannot reveal cell - missing game ID (ref check)");
       toast({
         title: "Game Error",
         description: "There was an issue with the game state. Please restart.",
@@ -200,9 +208,9 @@ export default function MinesGame({ appState }: MinesGameProps) {
     }
     
     try {
-      console.log("Attempting to reveal cell at index:", index, "with gameId:", gameId);
+      console.log("Attempting to reveal cell at index:", index, "with gameId:", gameIdRef.current);
       const res = await apiRequest("POST", "/api/games/mines/reveal", {
-        gameId,
+        gameId: gameIdRef.current,
         position: index,
         betAmount,
         minesCount,
@@ -238,6 +246,9 @@ export default function MinesGame({ appState }: MinesGameProps) {
         setGrid(newGrid);
         setGameOver(true);
         setIsGameActive(false);
+        
+        // Update refs to match
+        gameActiveRef.current = false;
         
         toast({
           title: "Game Over!",
@@ -285,12 +296,13 @@ export default function MinesGame({ appState }: MinesGameProps) {
   
   // Handle cashing out
   const handleCashout = async () => {
-    if (!isGameActive || gameOver || revealedPositions.length === 0) return;
+    // Use the refs for consistent state checking
+    if (!gameActiveRef.current || gameOver || revealedPositions.length === 0) return;
     
     try {
-      // Ensure we have a valid game ID
-      if (gameId === null) {
-        console.error("Cannot cashout - missing game ID");
+      // Ensure we have a valid game ID - use ref for consistency
+      if (gameIdRef.current === null) {
+        console.error("Cannot cashout - missing game ID (ref check)");
         toast({
           title: "Game Error",
           description: "There was an issue with the game state. Please restart.",
@@ -300,7 +312,7 @@ export default function MinesGame({ appState }: MinesGameProps) {
       }
       
       const res = await apiRequest("POST", "/api/games/mines/cashout", {
-        gameId,
+        gameId: gameIdRef.current,
         betAmount,
         multiplier: currentMultiplier,
         minesCount,
@@ -317,6 +329,9 @@ export default function MinesGame({ appState }: MinesGameProps) {
       
       setIsGameActive(false);
       setGameOver(true);
+      
+      // Update refs to match
+      gameActiveRef.current = false;
       
       toast({
         title: "Cashed Out!",
@@ -341,10 +356,11 @@ export default function MinesGame({ appState }: MinesGameProps) {
   // Add test handlers to ensure clicks are working
   const forceRevealCell = (index: number) => {
     console.log("Force reveal cell at index:", index);
-    if (isGameActive && gameId !== null) {
+    // Use refs for more reliable state checking
+    if (gameActiveRef.current && gameIdRef.current !== null) {
       handleRevealCell(index);
     } else {
-      console.log("Cannot reveal - game not active");
+      console.log("Cannot reveal - game not active (ref check)");
     }
   };
 
