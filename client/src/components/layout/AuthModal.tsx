@@ -201,8 +201,12 @@ export default function AuthModal({ isOpen, authType, onClose, appState }: AuthM
                     <FormLabel className="text-sm text-neutral-400">Email</FormLabel>
                     <FormControl>
                       <Input
-                        {...field}
-                        type="email"
+                        value={field.value}
+                        onChange={field.onChange}
+                        onBlur={field.onBlur}
+                        name={field.name}
+                        ref={field.ref}
+                        type="text"
                         className="bg-primary border-neutral-border text-white"
                         placeholder="your@email.com"
                       />
