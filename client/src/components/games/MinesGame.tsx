@@ -131,16 +131,26 @@ export default function MinesGame({ appState }: MinesGameProps) {
       
       // Store game data
       const newGameId = data.gameId;
-      setGameId(newGameId);
       setServerSeed(data.gameData.serverSeedHash);
       setNonce(data.gameData.nonce);
       
-      // IMPORTANT: Use a setTimeout to ensure the gameId is set before activating the game
-      // This breaks out of React's batching and ensures the state is updated
+      // IMPORTANT: Use a different approach with state update patterns to ensure consistency
+      // First store game ID in state
+      setGameId(newGameId);
+      
+      // Then use a timeout to make sure state updates are processed
       setTimeout(() => {
+        // Double-check gameId is set properly
+        console.log("Setting game active with ID:", newGameId);
+        // Set game active as a separate operation
         setIsGameActive(true);
-        console.log("Game activated with ID:", newGameId);
-      }, 50);
+        // Force a UI update after everything is set
+        setTimeout(() => {
+          console.log("Game active check:", isGameActive);
+          // Force update grid to make tiles clickable
+          setGrid(prev => [...prev]);
+        }, 100);
+      }, 100);
       
       toast({
         title: "New Game Started",
