@@ -149,13 +149,22 @@ export default function MinesGame({ appState }: MinesGameProps) {
   
   // Handle revealing a cell
   const handleRevealCell = async (index: number) => {
-    if (!isGameActive || gameOver) return;
+    console.log("Click detected on cell:", index);
+    console.log("Game state:", { isGameActive, gameOver, gameId });
+    
+    if (!isGameActive || gameOver) {
+      console.log("Game not active or already over, ignoring click");
+      return;
+    }
     
     // Don't reveal already revealed cells
-    if (grid[index].revealed) return;
+    if (grid[index].revealed) {
+      console.log("Cell already revealed, ignoring click");
+      return;
+    }
     
     try {
-      console.log("Revealing cell at index:", index);
+      console.log("Revealing cell at index:", index, "with gameId:", gameId);
       const res = await apiRequest("POST", "/api/games/mines/reveal", {
         gameId,
         position: index,
@@ -279,7 +288,19 @@ export default function MinesGame({ appState }: MinesGameProps) {
   return (
     <div className="bg-secondary rounded-xl p-6 border border-neutral-border">
       <div className="flex justify-between items-center mb-6">
-        <h3 className="font-bold text-lg">Mines</h3>
+        <div className="flex items-center space-x-3">
+          <h3 className="font-bold text-lg">Mines</h3>
+          {isGameActive && (
+            <span className="bg-green-500 text-white text-xs px-2 py-1 rounded-full">
+              Game Active
+            </span>
+          )}
+          {gameOver && (
+            <span className="bg-red-500 text-white text-xs px-2 py-1 rounded-full">
+              Game Over
+            </span>
+          )}
+        </div>
         <div className="flex items-center space-x-3">
           <button className="text-neutral-400 hover:text-white">
             <svg
@@ -396,6 +417,12 @@ export default function MinesGame({ appState }: MinesGameProps) {
         {/* Game Visualization */}
         <div className="lg:col-span-2 bg-primary rounded-lg p-4 h-full flex flex-col">
           <div className="flex-grow">
+            {gameId && (
+              <div className="mb-3 text-xs text-gray-400">
+                Game ID: {gameId} | Game Active: {isGameActive ? "Yes" : "No"} | 
+                Revealed Positions: {revealedPositions.length}
+              </div>
+            )}
             <div className="grid grid-cols-5 gap-2.5">
               {grid.map((cell) => (
                 <button
@@ -412,7 +439,7 @@ export default function MinesGame({ appState }: MinesGameProps) {
                         ? "bg-secondary hover:bg-neutral-800 border-neutral-700 hover:border-neutral-500 cursor-pointer"
                         : "bg-secondary border-neutral-700 opacity-70 cursor-not-allowed"
                   }`}
-                  disabled={!isGameActive || cell.revealed}
+                  type="button"
                 >
                   {cell.revealed && cell.isGem && (
                     <svg
@@ -447,6 +474,9 @@ export default function MinesGame({ appState }: MinesGameProps) {
                       <line x1="12" y1="8" x2="12" y2="16" />
                       <line x1="8" y1="12" x2="16" y2="12" />
                     </svg>
+                  )}
+                  {isGameActive && !cell.revealed && (
+                    <span className="text-neutral-500 text-xs">?</span>
                   )}
                 </button>
               ))}
