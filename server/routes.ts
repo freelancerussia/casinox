@@ -207,7 +207,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // User middleware to check authentication
-  const authMiddleware = (req: Request, res: Response, next: Function) => {
+  const authMiddleware = async (req: Request, res: Response, next: Function) => {
     console.log('Auth middleware check - Session ID:', req.sessionID);
     console.log('Auth middleware check - User ID in session:', req.session.userId);
     
@@ -219,10 +219,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Simple token validation (in a real app, use JWT or proper token validation)
         const userId = parseInt(token);
         if (!isNaN(userId)) {
-          // Set session data from token
-          req.session.userId = userId;
-          console.log('Using token-based authentication, userId:', userId);
-          return next();
+          // Verify the user exists in storage before proceeding
+          const user = await storage.getUser(userId);
+          if (user) {
+            // Set session data from token
+            req.session.userId = userId;
+            req.session.isAdmin = user.isAdmin || false;
+            console.log('Using token-based authentication, userId:', userId);
+            return next();
+          } else {
+            console.error('Token validation failed: User not found');
+            return res.status(401).json({ message: 'Authentication failed: User not found' });
+          }
         }
       } catch (error) {
         console.error('Token validation error:', error);
@@ -233,15 +241,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!req.session.userId) {
       return res.status(401).json({ message: 'Not authenticated' });
     }
+    
+    // For session-based auth, verify user exists
+    try {
+      const user = await storage.getUser(req.session.userId);
+      if (!user) {
+        req.session.destroy(() => {});
+        return res.status(401).json({ message: 'Authentication failed: User not found' });
+      }
+    } catch (error) {
+      console.error('Session validation error:', error);
+      return res.status(500).json({ message: 'Server error during authentication' });
+    }
+    
     next();
   };
   
   // Admin middleware
-  const adminMiddleware = (req: Request, res: Response, next: Function) => {
-    if (!req.session.userId || !req.session.isAdmin) {
-      return res.status(403).json({ message: 'Access denied' });
-    }
-    next();
+  const adminMiddleware = async (req: Request, res: Response, next: Function) => {
+    // First apply authentication middleware
+    await authMiddleware(req, res, async () => {
+      // Then check if the user is an admin
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.isAdmin) {
+        return res.status(403).json({ message: 'Access denied: Admin privileges required' });
+      }
+      next();
+    });
   };
   
   // Wallet Routes
