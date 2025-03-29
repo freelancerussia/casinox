@@ -6,7 +6,7 @@ import * as crypto from "crypto";
 import { z } from "zod";
 import session from "express-session";
 import MemoryStore from "memorystore";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 
 declare module "express-session" {
   interface SessionData {
@@ -18,7 +18,7 @@ declare module "express-session" {
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
-  const wss = new WebSocketServer({ server: httpServer });
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
   
   // Create session store
   const MemoryStoreSession = MemoryStore(session);
