@@ -28,16 +28,22 @@ export type AppState = {
   token?: string;
 };
 
+// Added functions for token management
+const getAuthToken = () => localStorage.getItem('authToken');
+const setAuthToken = (token: string | null) => localStorage.setItem('authToken', token || '');
+const removeAuthToken = () => localStorage.removeItem('authToken');
+
+
 function Router() {
   const [appState, setAppState] = useState<AppState>({
     user: null,
     isLoading: true,
     setUser: (user) => {
       if (user) {
-        // Store user data in localStorage for persistent auth
+        setAuthToken(user.token); //Store token separately
         localStorage.setItem('user', JSON.stringify(user));
       } else {
-        // Remove user data when logging out
+        removeAuthToken();
         localStorage.removeItem('user');
       }
       setAppState(prev => ({ ...prev, user, token: user?.token }));
@@ -47,29 +53,18 @@ function Router() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        // Try to get user data from server session first
-        const res = await apiRequest("GET", "/api/auth/me");
-        const userData = await res.json();
-        setAppState(prev => ({ ...prev, user: userData, isLoading: false }));
-      } catch (error) {
-        // If server session fails, try to get user data from localStorage
-        try {
-          const storedUser = localStorage.getItem('user');
-          if (storedUser) {
-            const userData = JSON.parse(storedUser);
-            if (userData && userData.token) {
-              setAppState(prev => ({ 
-                ...prev, 
-                user: userData, 
-                token: userData.token,
-                isLoading: false 
-              }));
-              return;
-            }
-          }
-        } catch (e) {
-          console.error('Error parsing stored user data:', e);
+        const token = getAuthToken();
+        if (token) {
+          const res = await apiRequest("GET", "/api/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+          const userData = await res.json();
+          setAppState(prev => ({ ...prev, user: userData, isLoading: false }));
+        } else {
+          const res = await apiRequest("GET", "/api/auth/me");
+          const userData = await res.json();
+          setAppState(prev => ({ ...prev, user: userData, isLoading: false }));
         }
+      } catch (error) {
+        removeAuthToken();
         setAppState(prev => ({ ...prev, isLoading: false }));
       }
     };
@@ -103,7 +98,7 @@ function Router() {
 
 function App() {
   const [isAdmin, setIsAdmin] = useState(false);
-  
+
   // Initialize WebSocket connection
   useEffect(() => {
     initWebSocket();
@@ -112,7 +107,7 @@ function App() {
       .then(res => res.json())
       .then(user => setIsAdmin(user.isAdmin));
   }, []);
-  
+
   return (
     <QueryClientProvider client={queryClient}>
       <Router />

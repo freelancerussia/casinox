@@ -38,7 +38,7 @@ type RegisterInput = z.infer<typeof registerSchema>;
 export default function AuthModal({ isOpen, authType, onClose, appState }: AuthModalProps) {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
-  const { setUser } = appState;
+  const { setUser, setToken } = appState; // Added setToken
 
   const loginForm = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
@@ -63,6 +63,9 @@ export default function AuthModal({ isOpen, authType, onClose, appState }: AuthM
       const res = await apiRequest("POST", "/api/auth/login", data);
       const userData = await res.json();
       setUser(userData);
+      //Store the token
+      setToken(userData.token); // Assuming the API returns a token in userData.token
+      localStorage.setItem('token', userData.token); //Added local storage
       toast({
         title: "Login successful",
         description: `Welcome back, ${userData.username}!`,
@@ -81,24 +84,26 @@ export default function AuthModal({ isOpen, authType, onClose, appState }: AuthM
   const handleRegister = async (data: RegisterInput) => {
     try {
       const { confirmPassword, ...registerData } = data;
-      
+
       // First register the user
       await apiRequest("POST", "/api/auth/register", registerData);
-      
+
       // Then automatically log them in
       const loginRes = await apiRequest("POST", "/api/auth/login", {
         username: data.username,
         password: data.password
       });
-      
+
       const userData = await loginRes.json();
       setUser(userData);
-      
+      //Store the token
+      setToken(userData.token); // Assuming the API returns a token in userData.token
+      localStorage.setItem('token', userData.token); //Added local storage
       toast({
         title: "Registration successful",
         description: `Welcome to CasinoX, ${userData.username}!`,
       });
-      
+
       onClose();
       setLocation("/");
     } catch (error: any) {
@@ -201,7 +206,7 @@ export default function AuthModal({ isOpen, authType, onClose, appState }: AuthM
                     <p className="text-red-500 text-xs mt-1">{registerForm.formState.errors.username.message}</p>
                   )}
                 </div>
-                
+
                 <div>
                   <label htmlFor="register-email" className="text-sm text-neutral-400 block mb-1">Email</label>
                   <input
@@ -215,7 +220,7 @@ export default function AuthModal({ isOpen, authType, onClose, appState }: AuthM
                     <p className="text-red-500 text-xs mt-1">{registerForm.formState.errors.email.message}</p>
                   )}
                 </div>
-                
+
                 <div>
                   <label htmlFor="register-password" className="text-sm text-neutral-400 block mb-1">Password</label>
                   <input
@@ -229,7 +234,7 @@ export default function AuthModal({ isOpen, authType, onClose, appState }: AuthM
                     <p className="text-red-500 text-xs mt-1">{registerForm.formState.errors.password.message}</p>
                   )}
                 </div>
-                
+
                 <div>
                   <label htmlFor="register-confirm-password" className="text-sm text-neutral-400 block mb-1">Confirm Password</label>
                   <input
@@ -244,7 +249,7 @@ export default function AuthModal({ isOpen, authType, onClose, appState }: AuthM
                   )}
                 </div>
               </div>
-              
+
               <Button type="submit" className="w-full bg-purple-500 hover:bg-purple-600">
                 Register
               </Button>
