@@ -102,14 +102,21 @@ function Router() {
 }
 
 function App() {
+  const [isAdmin, setIsAdmin] = useState(false);
+  
   // Initialize WebSocket connection
   useEffect(() => {
     initWebSocket();
+    // Check if user is admin
+    fetch('/api/auth/me')
+      .then(res => res.json())
+      .then(user => setIsAdmin(user.isAdmin));
   }, []);
   
   return (
     <QueryClientProvider client={queryClient}>
       <Router />
+      {isAdmin && <Link to="/admin" className="fixed bottom-4 right-4 bg-purple-600 text-white p-2 rounded">Admin Panel</Link>}
       <Toaster />
     </QueryClientProvider>
   );

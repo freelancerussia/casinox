@@ -113,3 +113,35 @@ Each game follows a similar pattern:
 2. Start development server: `npm run dev`
 3. Access application at `http://localhost:5000`
 
+## Database Architecture
+
+### Overview
+- Database: PostgreSQL (Neon)
+- ORM: Drizzle
+- Security: TLS encrypted connection, hashed passwords
+
+### Schema
+Main tables:
+- users: Stores user accounts and balances
+- game_history: Records all game plays
+- transactions: Tracks all financial transactions
+- server_seeds: Manages provably fair game seeds
+
+### Admin Access
+The admin panel is available at `/admin` for users with admin privileges. Features:
+- User management
+- Transaction history
+- Game statistics
+- Balance adjustments
+
+### Connection
+The database connection is configured via environment variables:
+```
+DATABASE_URL=postgresql://user:pass@host/db
+```
+
+For security:
+- All passwords are hashed before storage
+- Database connections are TLS encrypted
+- Access is restricted by connection string
+
